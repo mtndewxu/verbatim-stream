@@ -19,7 +19,8 @@ export class SpeechRecognizer {
   constructor(
     private lang: string,
     private onResult: SpeechCallback,
-    private onEnd?: () => void
+    private onEnd?: () => void,
+    private onError?: (error: string) => void
   ) {
     const SpeechRecognitionCtor =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -43,6 +44,15 @@ export class SpeechRecognizer {
       }
       if (final) this.onResult(final, true);
       else if (interim) this.onResult(interim, false);
+    };
+
+    (this.recognition as any).onerror = (event: any) => {
+      console.error("SpeechRecognition error:", event.error);
+      if (event.error === "not-allowed" || event.error === "service-not-available") {
+        this.isRunning = false;
+        this.onError?.(event.error);
+      }
+      // "no-speech" and "aborted" are normal — onend will auto-restart
     };
 
     this.recognition.onend = () => {
