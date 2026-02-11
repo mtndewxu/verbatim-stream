@@ -100,12 +100,11 @@ export class DeepgramTranscriber {
     // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
     const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
 
-    console.log("[Deepgram] Opening WebSocket:", wsUrl.replace(key, "***"));
+    console.log("[Deepgram] Opening WebSocket:", wsUrl);
 
-    // Use standard WebSocket with no sub-protocols; auth via URL isn't supported,
-    // so we pass the key as a query parameter (Deepgram's browser-friendly method)
-    const authedUrl = `${wsUrl}&token=${key}`;
-    this.ws = new WebSocket(authedUrl);
+    // Browser WebSockets can't set custom headers, so use Sec-WebSocket-Protocol
+    // to pass auth: ["token", "<key>"] — Deepgram's recommended browser method
+    this.ws = new WebSocket(wsUrl, ["token", key]);
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
