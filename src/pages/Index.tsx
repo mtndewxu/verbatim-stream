@@ -169,6 +169,11 @@ const Index = () => {
                 }
               });
             }
+          },
+          undefined,
+          (error) => {
+            toast({ variant: "destructive", title: "Monitor error", description: `Microphone access denied or unavailable (${error})` });
+            setIsMonitoring(false);
           }
         );
 
