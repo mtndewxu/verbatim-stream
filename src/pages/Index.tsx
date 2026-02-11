@@ -8,6 +8,8 @@ import { playTranslation } from "@/lib/tts";
 import { getLanguage, type Language } from "@/lib/languages";
 import { toast } from "@/hooks/use-toast";
 
+const PAUSE_THRESHOLD_MS = 3000; // 3 seconds of silence → finalize message block
+
 const Index = () => {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
   const [toLang, setToLang] = useState<Language>(getLanguage("en"));
@@ -18,21 +20,37 @@ const Index = () => {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
-  const [monitorInterim, setMonitorInterim] = useState("");
-  const [monitorInterimTranslation, setMonitorInterimTranslation] = useState("");
+
+  // Active message state for continuous merging
+  const [activeMessage, setActiveMessage] = useState<{
+    original: string;
+    interimSuffix: string;
+    translated: string;
+    interimTranslation: string;
+  } | null>(null);
 
   const monitorRef = useRef<DeepgramTranscriber | null>(null);
   const recorderRef = useRef<DeepgramTranscriber | null>(null);
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
+
+  // Monitor merging refs
+  const activeFinalRef = useRef(""); // accumulated finalized text in current block
+  const activeTranslatedRef = useRef(""); // accumulated translation of finalized text
+  const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interimTranslateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInterimTranslated = useRef("");
+  const fromLangRef = useRef(fromLang);
+  const toLangRef = useRef(toLang);
+
+  // Keep refs in sync
+  fromLangRef.current = fromLang;
+  toLangRef.current = toLang;
 
   const haptic = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  // Parallelized translate + auto-play pipeline
   const translateAndSpeak = useCallback(
     async (text: string, from: Language, to: Language, autoPlay = false) => {
       if (!text.trim()) return "";
@@ -40,8 +58,6 @@ const Index = () => {
       try {
         const result = await translateText(text.trim(), from.name, to.name);
         setIsTranslating(false);
-
-        // Start TTS in parallel as soon as translation is ready
         if (autoPlay && result) {
           playTranslation(result).catch((e) =>
             toast({ variant: "destructive", title: "Playback error", description: e.message })
@@ -72,16 +88,43 @@ const Index = () => {
     []
   );
 
+  // Finalize the current active message block → move to entries
+  const finalizeActiveBlock = useCallback(() => {
+    const text = activeFinalRef.current.trim();
+    const translated = activeTranslatedRef.current.trim();
+    if (text) {
+      addEntry(text, translated, fromLangRef.current, toLangRef.current, "Speaker");
+      // Auto-play the final translation
+      if (translated) {
+        playTranslation(translated).catch(() => {});
+      }
+    }
+    activeFinalRef.current = "";
+    activeTranslatedRef.current = "";
+    setActiveMessage(null);
+    lastInterimTranslated.current = "";
+    if (interimTranslateTimer.current) {
+      clearTimeout(interimTranslateTimer.current);
+      interimTranslateTimer.current = null;
+    }
+  }, [addEntry]);
+
+  // Reset pause timer (call on every transcript received)
+  const resetPauseTimer = useCallback(() => {
+    if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
+    pauseTimerRef.current = setTimeout(() => {
+      finalizeActiveBlock();
+    }, PAUSE_THRESHOLD_MS);
+  }, [finalizeActiveBlock]);
+
   const handleRecord = useCallback(() => {
     haptic();
     if (isRecording) {
-      // Stop recording
       isRecordingRef.current = false;
       recorderRef.current?.stop();
       recorderRef.current = null;
       setIsRecording(false);
 
-      // Translate final text
       const text = finalTextRef.current;
       if (text.trim()) {
         translateAndSpeak(text, fromLang, toLang).then((translated) => {
@@ -92,7 +135,6 @@ const Index = () => {
         });
       }
     } else {
-      // Start recording
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
@@ -148,12 +190,8 @@ const Index = () => {
   const handleSwapLangs = useCallback(() => {
     setFromLang(toLang);
     setToLang(fromLang);
-    if (recorderRef.current) {
-      recorderRef.current.setLang(toLang.speechCode);
-    }
-    if (monitorRef.current) {
-      monitorRef.current.setLang(toLang.speechCode);
-    }
+    if (recorderRef.current) recorderRef.current.setLang(toLang.speechCode);
+    if (monitorRef.current) monitorRef.current.setLang(toLang.speechCode);
   }, [fromLang, toLang]);
 
   const handleMonitorToggle = useCallback(
@@ -161,50 +199,74 @@ const Index = () => {
       haptic();
       setIsMonitoring(checked);
       if (checked) {
-        let monitorBuffer = "";
-        let interimAccum = "";
+        activeFinalRef.current = "";
+        activeTranslatedRef.current = "";
+        setActiveMessage(null);
 
         const monitor = new DeepgramTranscriber(
           fromLang.speechCode,
           (text, isFinal) => {
+            resetPauseTimer();
+
             if (isFinal) {
-              monitorBuffer += text + " ";
-              const captured = monitorBuffer.trim();
-              monitorBuffer = "";
-              interimAccum = "";
+              // Append finalized text to active block
+              activeFinalRef.current += text + " ";
+              const finalSoFar = activeFinalRef.current.trim();
 
               // Clear interim display
-              setMonitorInterim("");
-              setMonitorInterimTranslation("");
               lastInterimTranslated.current = "";
               if (interimTranslateTimer.current) {
                 clearTimeout(interimTranslateTimer.current);
                 interimTranslateTimer.current = null;
               }
 
-              // Fire final translation immediately
-              translateAndSpeak(captured, fromLang, toLang).then((translated) => {
-                if (translated) {
-                  addEntry(captured, translated, fromLang, toLang, "Speaker");
-                }
+              // Update active message: solid original, clear interim suffix
+              setActiveMessage({
+                original: finalSoFar,
+                interimSuffix: "",
+                translated: activeTranslatedRef.current,
+                interimTranslation: "",
               });
-            } else {
-              // Show interim text dimmed
-              interimAccum = (monitorBuffer + text).trim();
-              setMonitorInterim(interimAccum);
 
-              // Debounce early translation of interim text (300ms idle)
-              if (interimTranslateTimer.current) {
-                clearTimeout(interimTranslateTimer.current);
-              }
-              const segmentToTranslate = interimAccum;
-              if (segmentToTranslate.length > 5 && segmentToTranslate !== lastInterimTranslated.current) {
+              // Translate the full finalized text
+              translateText(finalSoFar, fromLangRef.current.name, toLangRef.current.name)
+                .then((t) => {
+                  activeTranslatedRef.current = t;
+                  setActiveMessage((prev) =>
+                    prev ? { ...prev, translated: t, interimTranslation: "" } : null
+                  );
+                })
+                .catch(() => {});
+            } else {
+              // Interim: show as dimmed suffix
+              const interimSuffix = " " + text;
+              const fullPreview = (activeFinalRef.current + text).trim();
+
+              setActiveMessage((prev) => ({
+                original: prev?.original || activeFinalRef.current.trim(),
+                interimSuffix,
+                translated: prev?.translated || activeTranslatedRef.current,
+                interimTranslation: prev?.interimTranslation || "",
+              }));
+
+              // Zero-latency: translate interim immediately with debounce
+              if (interimTranslateTimer.current) clearTimeout(interimTranslateTimer.current);
+              if (fullPreview.length > 5 && fullPreview !== lastInterimTranslated.current) {
                 interimTranslateTimer.current = setTimeout(() => {
-                  lastInterimTranslated.current = segmentToTranslate;
-                  translateText(segmentToTranslate, fromLang.name, toLang.name)
-                    .then((t) => setMonitorInterimTranslation(t))
+                  lastInterimTranslated.current = fullPreview;
+                  translateText(fullPreview, fromLangRef.current.name, toLangRef.current.name)
+                    .then((t) => {
+                      // Only show the part beyond the already-translated final text
+                      const existingTranslation = activeTranslatedRef.current;
+                      const interimExtra = existingTranslation
+                        ? t.replace(existingTranslation, "").trim()
+                        : t;
+                      setActiveMessage((prev) =>
+                        prev ? { ...prev, interimTranslation: interimExtra || t } : null
+                      );
+                    })
                     .catch(() => {});
-                }, 300);
+                }, 200);
               }
             }
           },
@@ -218,17 +280,22 @@ const Index = () => {
         monitorRef.current = monitor;
         monitor.start();
       } else {
+        // Stop
+        if (pauseTimerRef.current) {
+          clearTimeout(pauseTimerRef.current);
+          pauseTimerRef.current = null;
+        }
+        // Finalize any remaining active block
+        finalizeActiveBlock();
         monitorRef.current?.stop();
         monitorRef.current = null;
-        setMonitorInterim("");
-        setMonitorInterimTranslation("");
         if (interimTranslateTimer.current) {
           clearTimeout(interimTranslateTimer.current);
           interimTranslateTimer.current = null;
         }
       }
     },
-    [fromLang, toLang, translateAndSpeak, addEntry]
+    [fromLang, toLang, resetPauseTimer, finalizeActiveBlock]
   );
 
   return (
@@ -245,7 +312,7 @@ const Index = () => {
       </header>
 
       {/* Monitor (top ~60%) */}
-      <MonitorSection entries={entries} isMonitoring={isMonitoring} interimText={monitorInterim} interimTranslation={monitorInterimTranslation} />
+      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
 
       {/* Console (bottom ~40%) */}
       <ConsoleSection
