@@ -18,11 +18,15 @@ const Index = () => {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [monitorInterim, setMonitorInterim] = useState("");
+  const [monitorInterimTranslation, setMonitorInterimTranslation] = useState("");
 
   const monitorRef = useRef<DeepgramTranscriber | null>(null);
   const recorderRef = useRef<DeepgramTranscriber | null>(null);
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
+  const interimTranslateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInterimTranslated = useRef("");
 
   const haptic = () => {
     if (navigator.vibrate) navigator.vibrate(10);
@@ -158,6 +162,8 @@ const Index = () => {
       setIsMonitoring(checked);
       if (checked) {
         let monitorBuffer = "";
+        let interimAccum = "";
+
         const monitor = new DeepgramTranscriber(
           fromLang.speechCode,
           (text, isFinal) => {
@@ -165,13 +171,41 @@ const Index = () => {
               monitorBuffer += text + " ";
               const captured = monitorBuffer.trim();
               monitorBuffer = "";
+              interimAccum = "";
 
-              // Fire translation immediately (parallelized — TTS not auto-played for monitor)
+              // Clear interim display
+              setMonitorInterim("");
+              setMonitorInterimTranslation("");
+              lastInterimTranslated.current = "";
+              if (interimTranslateTimer.current) {
+                clearTimeout(interimTranslateTimer.current);
+                interimTranslateTimer.current = null;
+              }
+
+              // Fire final translation immediately
               translateAndSpeak(captured, fromLang, toLang).then((translated) => {
                 if (translated) {
                   addEntry(captured, translated, fromLang, toLang, "Speaker");
                 }
               });
+            } else {
+              // Show interim text dimmed
+              interimAccum = (monitorBuffer + text).trim();
+              setMonitorInterim(interimAccum);
+
+              // Debounce early translation of interim text (300ms idle)
+              if (interimTranslateTimer.current) {
+                clearTimeout(interimTranslateTimer.current);
+              }
+              const segmentToTranslate = interimAccum;
+              if (segmentToTranslate.length > 5 && segmentToTranslate !== lastInterimTranslated.current) {
+                interimTranslateTimer.current = setTimeout(() => {
+                  lastInterimTranslated.current = segmentToTranslate;
+                  translateText(segmentToTranslate, fromLang.name, toLang.name)
+                    .then((t) => setMonitorInterimTranslation(t))
+                    .catch(() => {});
+                }, 300);
+              }
             }
           },
           undefined,
@@ -186,6 +220,12 @@ const Index = () => {
       } else {
         monitorRef.current?.stop();
         monitorRef.current = null;
+        setMonitorInterim("");
+        setMonitorInterimTranslation("");
+        if (interimTranslateTimer.current) {
+          clearTimeout(interimTranslateTimer.current);
+          interimTranslateTimer.current = null;
+        }
       }
     },
     [fromLang, toLang, translateAndSpeak, addEntry]
@@ -205,7 +245,7 @@ const Index = () => {
       </header>
 
       {/* Monitor (top ~60%) */}
-      <MonitorSection entries={entries} isMonitoring={isMonitoring} />
+      <MonitorSection entries={entries} isMonitoring={isMonitoring} interimText={monitorInterim} interimTranslation={monitorInterimTranslation} />
 
       {/* Console (bottom ~40%) */}
       <ConsoleSection

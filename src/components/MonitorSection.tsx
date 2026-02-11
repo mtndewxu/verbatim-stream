@@ -13,14 +13,16 @@ export interface ConversationEntry {
 interface MonitorSectionProps {
   entries: ConversationEntry[];
   isMonitoring: boolean;
+  interimText?: string;
+  interimTranslation?: string;
 }
 
-export function MonitorSection({ entries, isMonitoring }: MonitorSectionProps) {
+export function MonitorSection({ entries, isMonitoring, interimText, interimTranslation }: MonitorSectionProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [entries]);
+  }, [entries, interimText, interimTranslation]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -42,7 +44,7 @@ export function MonitorSection({ entries, isMonitoring }: MonitorSectionProps) {
       {/* Messages */}
       <ScrollArea className="flex-1">
         <div className="px-5 py-3 space-y-3">
-          {entries.length === 0 && (
+          {entries.length === 0 && !interimText && (
             <div className="flex items-center justify-center h-32">
               <p className="text-sm text-muted-foreground">
                 Start speaking to see translations here
@@ -65,6 +67,24 @@ export function MonitorSection({ entries, isMonitoring }: MonitorSectionProps) {
               </p>
             </div>
           ))}
+
+          {/* Interim (partial) transcript — dimmed */}
+          {interimText && (
+            <div className="bg-card/50 rounded-2xl px-4 py-3 border border-border/50 opacity-60">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                Speaker <span className="text-[9px] italic font-normal">(listening…)</span>
+              </div>
+              <p className="text-sm text-muted-foreground italic leading-relaxed">
+                {interimText}
+              </p>
+              {interimTranslation && (
+                <p className="text-sm text-primary/50 italic leading-relaxed mt-1">
+                  → {interimTranslation}
+                </p>
+              )}
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
