@@ -157,7 +157,15 @@ const Index = () => {
               monitorBuffer = "";
               doTranslate(captured, fromLang, toLang).then((translated) => {
                 if (translated) {
-                  addEntry(captured, translated, fromLang, toLang);
+                  const entry: ConversationEntry = {
+                    id: crypto.randomUUID(),
+                    speaker: "Speaker",
+                    original: captured,
+                    translated,
+                    fromFlag: fromLang.flag,
+                    toFlag: toLang.flag,
+                  };
+                  setEntries((prev) => [...prev, entry]);
                 }
               });
             }
