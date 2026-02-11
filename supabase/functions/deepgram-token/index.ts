@@ -12,67 +12,24 @@ serve(async (req) => {
   }
 
   try {
+    // Validate caller has a valid authorization header
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const DEEPGRAM_API_KEY = Deno.env.get("DEEPGRAM_API_KEY");
     if (!DEEPGRAM_API_KEY) {
       throw new Error("DEEPGRAM_API_KEY not configured");
     }
 
-    // Use Deepgram's temporary key API for better security
-    // This creates a short-lived key scoped to listen only
-    const resp = await fetch("https://api.deepgram.com/v1/projects", {
-      headers: { Authorization: `Token ${DEEPGRAM_API_KEY}` },
-    });
-
-    if (!resp.ok) {
-      console.error("Deepgram projects error:", resp.status, await resp.text());
-      // Fallback: return the main key if projects API fails
-      return new Response(
-        JSON.stringify({ key: DEEPGRAM_API_KEY }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const projects = await resp.json();
-    const projectId = projects.projects?.[0]?.project_id;
-
-    if (!projectId) {
-      console.log("No project found, returning main key");
-      return new Response(
-        JSON.stringify({ key: DEEPGRAM_API_KEY }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Create a temporary key valid for 60 seconds
-    const keyResp = await fetch(
-      `https://api.deepgram.com/v1/projects/${projectId}/keys`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${DEEPGRAM_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comment: "Temporary browser key",
-          scopes: ["usage:write"],
-          time_to_live_in_seconds: 60,
-        }),
-      }
-    );
-
-    if (!keyResp.ok) {
-      console.error("Deepgram temp key error:", keyResp.status, await keyResp.text());
-      return new Response(
-        JSON.stringify({ key: DEEPGRAM_API_KEY }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const keyData = await keyResp.json();
-    console.log("Temporary Deepgram key created, TTL: 60s");
-
+    // Return the key directly — temp key creation requires keys:write scope
+    // which this API key doesn't have. The key is gated behind auth above.
     return new Response(
-      JSON.stringify({ key: keyData.key }),
+      JSON.stringify({ key: DEEPGRAM_API_KEY }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
