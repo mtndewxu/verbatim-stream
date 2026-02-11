@@ -1,1 +1,4 @@
 project_id = "dxrizlomspjscejhrvek"
+
+[functions.deepgram-token]
+verify_jwt = false

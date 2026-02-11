@@ -33,11 +33,19 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
+          model: "openai/gpt-5-nano",
           messages: [
             {
               role: "system",
-              content: `You are a professional translator. Translate the user's text from ${fromLang} to ${toLang}. Output ONLY the translated text, nothing else. No explanations, no quotes, no formatting.`,
+              content: `You are an expert real-time interpreter. Translate the user's speech from ${fromLang} to ${toLang}.
+
+Rules:
+- Output ONLY the translated text. No explanations, quotes, or formatting.
+- Use natural, conversational language — as a native speaker would actually say it in everyday speech.
+- Preserve the speaker's tone, intent, and register (formal/informal/casual).
+- For idioms or cultural expressions, use the closest natural equivalent in the target language rather than literal translation.
+- Keep filler words and hedging only if they convey meaningful nuance.
+- If the input is a fragment or incomplete sentence, translate it naturally as a fragment.`,
             },
             { role: "user", content: text },
           ],

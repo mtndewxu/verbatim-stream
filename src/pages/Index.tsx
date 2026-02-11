@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
-import { SpeechRecognizer } from "@/lib/speech";
+import { DeepgramTranscriber } from "@/lib/deepgram";
 import { translateText } from "@/lib/translate";
 import { playTranslation } from "@/lib/tts";
 import { getLanguage, type Language } from "@/lib/languages";
@@ -19,36 +19,45 @@ const Index = () => {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
 
-  const recognizerRef = useRef<SpeechRecognizer | null>(null);
-  const monitorRef = useRef<SpeechRecognizer | null>(null);
+  const monitorRef = useRef<DeepgramTranscriber | null>(null);
+  const recorderRef = useRef<DeepgramTranscriber | null>(null);
   const finalTextRef = useRef("");
+  const isRecordingRef = useRef(false);
 
   const haptic = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  const doTranslate = useCallback(
-    async (text: string, from: Language, to: Language) => {
+  // Parallelized translate + auto-play pipeline
+  const translateAndSpeak = useCallback(
+    async (text: string, from: Language, to: Language, autoPlay = false) => {
       if (!text.trim()) return "";
       setIsTranslating(true);
       try {
         const result = await translateText(text.trim(), from.name, to.name);
+        setIsTranslating(false);
+
+        // Start TTS in parallel as soon as translation is ready
+        if (autoPlay && result) {
+          playTranslation(result).catch((e) =>
+            toast({ variant: "destructive", title: "Playback error", description: e.message })
+          );
+        }
         return result;
       } catch (e: any) {
+        setIsTranslating(false);
         toast({ variant: "destructive", title: "Translation error", description: e.message });
         return "";
-      } finally {
-        setIsTranslating(false);
       }
     },
     []
   );
 
   const addEntry = useCallback(
-    (original: string, translated: string, from: Language, to: Language) => {
+    (original: string, translated: string, from: Language, to: Language, speaker = "You") => {
       const entry: ConversationEntry = {
         id: crypto.randomUUID(),
-        speaker: "You",
+        speaker,
         original,
         translated,
         fromFlag: from.flag,
@@ -63,17 +72,18 @@ const Index = () => {
     haptic();
     if (isRecording) {
       // Stop recording
-      recognizerRef.current?.stop();
-      recognizerRef.current = null;
+      isRecordingRef.current = false;
+      recorderRef.current?.stop();
+      recorderRef.current = null;
       setIsRecording(false);
 
       // Translate final text
       const text = finalTextRef.current;
       if (text.trim()) {
-        doTranslate(text, fromLang, toLang).then((translated) => {
+        translateAndSpeak(text, fromLang, toLang).then((translated) => {
           if (translated) {
             setTranslationText(translated);
-            addEntry(text, translated, fromLang, toLang);
+            addEntry(text, translated, fromLang, toLang, "You");
           }
         });
       }
@@ -82,34 +92,34 @@ const Index = () => {
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
+      isRecordingRef.current = true;
 
-      const rec = new SpeechRecognizer(
+      const rec = new DeepgramTranscriber(
         fromLang.speechCode,
         (text, isFinal) => {
           if (isFinal) {
-            finalTextRef.current += text;
-            setSpeechText(finalTextRef.current);
+            finalTextRef.current += text + " ";
+            setSpeechText(finalTextRef.current.trim());
           } else {
-            setSpeechText(finalTextRef.current + text);
+            setSpeechText((finalTextRef.current + text).trim());
           }
         },
-        () => setIsRecording(false)
+        () => {
+          isRecordingRef.current = false;
+          setIsRecording(false);
+        },
+        (error) => {
+          toast({ variant: "destructive", title: "Mic error", description: error });
+          isRecordingRef.current = false;
+          setIsRecording(false);
+        }
       );
 
-      if (!rec.supported) {
-        toast({
-          variant: "destructive",
-          title: "Not supported",
-          description: "Speech recognition is not supported in this browser.",
-        });
-        return;
-      }
-
-      recognizerRef.current = rec;
+      recorderRef.current = rec;
       rec.start();
       setIsRecording(true);
     }
-  }, [isRecording, fromLang, toLang, doTranslate, addEntry]);
+  }, [isRecording, fromLang, toLang, translateAndSpeak, addEntry]);
 
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
@@ -134,8 +144,8 @@ const Index = () => {
   const handleSwapLangs = useCallback(() => {
     setFromLang(toLang);
     setToLang(fromLang);
-    if (recognizerRef.current) {
-      recognizerRef.current.setLang(toLang.speechCode);
+    if (recorderRef.current) {
+      recorderRef.current.setLang(toLang.speechCode);
     }
     if (monitorRef.current) {
       monitorRef.current.setLang(toLang.speechCode);
@@ -148,44 +158,28 @@ const Index = () => {
       setIsMonitoring(checked);
       if (checked) {
         let monitorBuffer = "";
-        const monitor = new SpeechRecognizer(
+        const monitor = new DeepgramTranscriber(
           fromLang.speechCode,
           (text, isFinal) => {
             if (isFinal) {
-              monitorBuffer += text;
-              const captured = monitorBuffer;
+              monitorBuffer += text + " ";
+              const captured = monitorBuffer.trim();
               monitorBuffer = "";
-              doTranslate(captured, fromLang, toLang).then((translated) => {
+
+              // Fire translation immediately (parallelized — TTS not auto-played for monitor)
+              translateAndSpeak(captured, fromLang, toLang).then((translated) => {
                 if (translated) {
-                  const entry: ConversationEntry = {
-                    id: crypto.randomUUID(),
-                    speaker: "Speaker",
-                    original: captured,
-                    translated,
-                    fromFlag: fromLang.flag,
-                    toFlag: toLang.flag,
-                  };
-                  setEntries((prev) => [...prev, entry]);
+                  addEntry(captured, translated, fromLang, toLang, "Speaker");
                 }
               });
             }
           },
           undefined,
           (error) => {
-            toast({ variant: "destructive", title: "Monitor error", description: `Microphone access denied or unavailable (${error})` });
+            toast({ variant: "destructive", title: "Monitor error", description: error });
             setIsMonitoring(false);
           }
         );
-
-        if (!monitor.supported) {
-          toast({
-            variant: "destructive",
-            title: "Not supported",
-            description: "Speech recognition is not supported in this browser.",
-          });
-          setIsMonitoring(false);
-          return;
-        }
 
         monitorRef.current = monitor;
         monitor.start();
@@ -194,7 +188,7 @@ const Index = () => {
         monitorRef.current = null;
       }
     },
-    [fromLang, toLang, doTranslate, addEntry]
+    [fromLang, toLang, translateAndSpeak, addEntry]
   );
 
   return (
