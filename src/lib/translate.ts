@@ -1,0 +1,24 @@
+const TRANSLATE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/translate`;
+
+export async function translateText(
+  text: string,
+  fromLang: string,
+  toLang: string
+): Promise<string> {
+  const resp = await fetch(TRANSLATE_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ text, fromLang, toLang }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`Translation failed: ${err}`);
+  }
+
+  const data = await resp.json();
+  return data.translation;
+}
