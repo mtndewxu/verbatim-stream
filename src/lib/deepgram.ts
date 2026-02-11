@@ -1,11 +1,12 @@
+import { toast } from "@/hooks/use-toast";
+
 const TOKEN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepgram-token`;
 
 type TranscriptCallback = (text: string, isFinal: boolean) => void;
 
-let cachedKey: string | null = null;
-
 async function getDeepgramKey(): Promise<string> {
-  if (cachedKey) return cachedKey;
+  // Always fetch a fresh temporary key (TTL 60s from edge function)
+  console.log("[Deepgram] Fetching temporary API key from edge function…");
   const resp = await fetch(TOKEN_URL, {
     headers: {
       "Content-Type": "application/json",
@@ -14,7 +15,7 @@ async function getDeepgramKey(): Promise<string> {
   });
   if (!resp.ok) throw new Error("Failed to get Deepgram token");
   const data = await resp.json();
-  cachedKey = data.key;
+  console.log("[Deepgram] Temporary API key obtained ✓");
   return data.key;
 }
 
@@ -28,6 +29,7 @@ export class DeepgramTranscriber {
   private readonly MAX_RECONNECT_ATTEMPTS = 10;
   private readonly RECONNECT_BASE_DELAY = 1000;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryToastShown = false;
 
   constructor(
     private lang: string,
@@ -48,10 +50,10 @@ export class DeepgramTranscriber {
     if (this.running) return;
     this.running = true;
     this.reconnectAttempts = 0;
+    this.retryToastShown = false;
     console.log("[Deepgram] Starting transcriber, lang:", this.lang);
 
     try {
-      // Acquire mic once and keep it for the session
       if (!this.mediaStream) {
         console.log("[Deepgram] Requesting microphone access…");
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -70,10 +72,11 @@ export class DeepgramTranscriber {
   }
 
   private async setupAudioWorklet() {
-    if (this.workletNode) return; // already set up
+    if (this.workletNode) return;
 
     console.log("[Deepgram] Setting up AudioWorklet…");
     this.audioCtx = new AudioContext({ sampleRate: 16000 });
+    console.log("[Deepgram] AudioContext created, actual sampleRate:", this.audioCtx.sampleRate);
     await this.audioCtx.audioWorklet.addModule("/deepgram-processor.js");
 
     const source = this.audioCtx.createMediaStreamSource(this.mediaStream!);
@@ -86,27 +89,38 @@ export class DeepgramTranscriber {
     };
 
     source.connect(this.workletNode);
-    // Connect to destination to keep the graph alive (silent output)
     this.workletNode.connect(this.audioCtx.destination);
-    console.log("[Deepgram] AudioWorklet pipeline ready (sampleRate: 16000)");
+    console.log("[Deepgram] AudioWorklet pipeline ready (linear16, 16kHz)");
   }
 
   private async connectWebSocket() {
     const key = await getDeepgramKey();
     const dgLang = this.mapLang(this.lang);
-    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&punctuate=true&interim_results=true&endpointing=300&smart_format=true`;
 
-    console.log("[Deepgram] Opening WebSocket to", dgLang);
-    this.ws = new WebSocket(wsUrl, ["token", key]);
+    // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
+    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
+
+    console.log("[Deepgram] Opening WebSocket:", wsUrl.replace(key, "***"));
+
+    // Use standard WebSocket with no sub-protocols; auth via URL isn't supported,
+    // so we pass the key as a query parameter (Deepgram's browser-friendly method)
+    const authedUrl = `${wsUrl}&token=${key}`;
+    this.ws = new WebSocket(authedUrl);
+    this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
       console.log("[Deepgram] WebSocket connected ✓ (attempt", this.reconnectAttempts, ")");
-      this.reconnectAttempts = 0; // reset on success
+      this.reconnectAttempts = 0;
+      this.retryToastShown = false;
     };
 
     this.ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data as string);
+        if (data.type === "Metadata") {
+          console.log("[Deepgram] Metadata received — request_id:", data.request_id, "model:", data.model_info?.name);
+          return;
+        }
         const alt = data.channel?.alternatives?.[0];
         if (alt?.transcript) {
           const isFinal = data.is_final === true;
@@ -119,7 +133,7 @@ export class DeepgramTranscriber {
     };
 
     this.ws.onerror = (event) => {
-      console.error("[Deepgram] WebSocket error:", event);
+      console.error("[Deepgram] WebSocket error event fired:", event);
     };
 
     this.ws.onclose = (event) => {
@@ -141,10 +155,17 @@ export class DeepgramTranscriber {
       return;
     }
 
+    // Show toast once when retrying begins
+    if (!this.retryToastShown) {
+      this.retryToastShown = true;
+      toast({ title: "Connection retrying…", description: "Deepgram WebSocket reconnecting" });
+    }
+
     const delay = this.RECONNECT_BASE_DELAY * Math.pow(2, this.reconnectAttempts) + Math.random() * 500;
     this.reconnectAttempts++;
     console.log(`[Deepgram] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})…`);
 
+    // Fresh key will be fetched on each reconnect (temp keys are short-lived)
     this.reconnectTimer = setTimeout(async () => {
       if (!this.running) return;
       try {
@@ -157,11 +178,9 @@ export class DeepgramTranscriber {
   }
 
   private reconnectWebSocket() {
-    // Close current WS and reconnect with new lang
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       this.ws.close();
     }
-    // onclose handler will trigger scheduleReconnect
   }
 
   stop() {
