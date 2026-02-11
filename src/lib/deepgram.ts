@@ -21,9 +21,13 @@ async function getDeepgramKey(): Promise<string> {
 export class DeepgramTranscriber {
   private ws: WebSocket | null = null;
   private mediaStream: MediaStream | null = null;
-  private processor: ScriptProcessorNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
   private audioCtx: AudioContext | null = null;
   private running = false;
+  private reconnectAttempts = 0;
+  private readonly MAX_RECONNECT_ATTEMPTS = 10;
+  private readonly RECONNECT_BASE_DELAY = 1000;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private lang: string,
@@ -34,101 +38,143 @@ export class DeepgramTranscriber {
 
   setLang(lang: string) {
     this.lang = lang;
-    // If running, restart with new lang
     if (this.running) {
-      this.stop();
-      this.start();
+      console.log("[Deepgram] Language changed to", lang, "— reconnecting WebSocket");
+      this.reconnectWebSocket();
     }
   }
 
   async start() {
     if (this.running) return;
     this.running = true;
+    this.reconnectAttempts = 0;
+    console.log("[Deepgram] Starting transcriber, lang:", this.lang);
 
     try {
-      const key = await getDeepgramKey();
+      // Acquire mic once and keep it for the session
+      if (!this.mediaStream) {
+        console.log("[Deepgram] Requesting microphone access…");
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+        console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
+      }
 
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
-
-      // Map speech codes to Deepgram language codes
-      const dgLang = this.mapLang(this.lang);
-
-      const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&punctuate=true&interim_results=true&endpointing=300&smart_format=true`;
-
-      this.ws = new WebSocket(wsUrl, ["token", key]);
-
-      this.ws.onopen = () => {
-        console.log("Deepgram connected");
-        this.startStreaming();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          const alt = data.channel?.alternatives?.[0];
-          if (alt?.transcript) {
-            const isFinal = data.is_final === true;
-            this.onResult(alt.transcript, isFinal);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      };
-
-      this.ws.onerror = (event) => {
-        console.error("Deepgram WebSocket error:", event);
-        this.onError?.("Deepgram connection error");
-      };
-
-      this.ws.onclose = () => {
-        console.log("Deepgram disconnected");
-        if (this.running) {
-          // Auto-reconnect
-          setTimeout(() => {
-            if (this.running) this.start();
-          }, 1000);
-        } else {
-          this.onEnd?.();
-        }
-      };
+      await this.setupAudioWorklet();
+      await this.connectWebSocket();
     } catch (e: any) {
-      console.error("Deepgram start error:", e);
+      console.error("[Deepgram] Start error:", e);
       this.running = false;
       this.onError?.(e.message || "Failed to start transcription");
     }
   }
 
-  private startStreaming() {
-    if (!this.mediaStream || !this.ws) return;
+  private async setupAudioWorklet() {
+    if (this.workletNode) return; // already set up
 
+    console.log("[Deepgram] Setting up AudioWorklet…");
     this.audioCtx = new AudioContext({ sampleRate: 16000 });
-    const source = this.audioCtx.createMediaStreamSource(this.mediaStream);
+    await this.audioCtx.audioWorklet.addModule("/deepgram-processor.js");
 
-    // Use ScriptProcessorNode for broad compatibility
-    this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
-    this.processor.onaudioprocess = (e) => {
-      if (this.ws?.readyState !== WebSocket.OPEN) return;
-      const input = e.inputBuffer.getChannelData(0);
-      // Convert Float32 to Int16 PCM
-      const pcm = new Int16Array(input.length);
-      for (let i = 0; i < input.length; i++) {
-        const s = Math.max(-1, Math.min(1, input[i]));
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    const source = this.audioCtx.createMediaStreamSource(this.mediaStream!);
+    this.workletNode = new AudioWorkletNode(this.audioCtx, "deepgram-processor");
+
+    this.workletNode.port.onmessage = (event: MessageEvent) => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(event.data);
       }
-      this.ws.send(pcm.buffer);
     };
 
-    source.connect(this.processor);
-    this.processor.connect(this.audioCtx.destination);
+    source.connect(this.workletNode);
+    // Connect to destination to keep the graph alive (silent output)
+    this.workletNode.connect(this.audioCtx.destination);
+    console.log("[Deepgram] AudioWorklet pipeline ready (sampleRate: 16000)");
+  }
+
+  private async connectWebSocket() {
+    const key = await getDeepgramKey();
+    const dgLang = this.mapLang(this.lang);
+    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&punctuate=true&interim_results=true&endpointing=300&smart_format=true`;
+
+    console.log("[Deepgram] Opening WebSocket to", dgLang);
+    this.ws = new WebSocket(wsUrl, ["token", key]);
+
+    this.ws.onopen = () => {
+      console.log("[Deepgram] WebSocket connected ✓ (attempt", this.reconnectAttempts, ")");
+      this.reconnectAttempts = 0; // reset on success
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const alt = data.channel?.alternatives?.[0];
+        if (alt?.transcript) {
+          const isFinal = data.is_final === true;
+          console.log(`[Deepgram] Transcript (${isFinal ? "FINAL" : "interim"}):`, alt.transcript);
+          this.onResult(alt.transcript, isFinal);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    this.ws.onerror = (event) => {
+      console.error("[Deepgram] WebSocket error:", event);
+    };
+
+    this.ws.onclose = (event) => {
+      console.log(`[Deepgram] WebSocket closed — code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean}`);
+      if (this.running) {
+        this.scheduleReconnect();
+      } else {
+        this.onEnd?.();
+      }
+    };
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+      console.error(`[Deepgram] Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached — stopping`);
+      this.onError?.("Deepgram connection lost after multiple retries");
+      this.running = false;
+      this.onEnd?.();
+      return;
+    }
+
+    const delay = this.RECONNECT_BASE_DELAY * Math.pow(2, this.reconnectAttempts) + Math.random() * 500;
+    this.reconnectAttempts++;
+    console.log(`[Deepgram] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})…`);
+
+    this.reconnectTimer = setTimeout(async () => {
+      if (!this.running) return;
+      try {
+        await this.connectWebSocket();
+      } catch (e: any) {
+        console.error("[Deepgram] Reconnect failed:", e);
+        this.scheduleReconnect();
+      }
+    }, delay);
+  }
+
+  private reconnectWebSocket() {
+    // Close current WS and reconnect with new lang
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
+      this.ws.close();
+    }
+    // onclose handler will trigger scheduleReconnect
   }
 
   stop() {
+    console.log("[Deepgram] Stopping transcriber");
     this.running = false;
 
-    this.processor?.disconnect();
-    this.processor = null;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.workletNode?.disconnect();
+    this.workletNode = null;
 
     if (this.audioCtx?.state !== "closed") {
       this.audioCtx?.close().catch(() => {});
@@ -139,15 +185,14 @@ export class DeepgramTranscriber {
     this.mediaStream = null;
 
     if (this.ws?.readyState === WebSocket.OPEN) {
-      // Send close message per Deepgram protocol
       this.ws.send(JSON.stringify({ type: "CloseStream" }));
       this.ws.close();
     }
     this.ws = null;
+    console.log("[Deepgram] Transcriber stopped ✓");
   }
 
   private mapLang(speechCode: string): string {
-    // Map common BCP-47 codes to Deepgram language codes
     const map: Record<string, string> = {
       "zh-CN": "zh",
       "zh-TW": "zh-TW",
@@ -168,6 +213,6 @@ export class DeepgramTranscriber {
   }
 
   get supported() {
-    return true; // Deepgram works in all modern browsers
+    return true;
   }
 }
