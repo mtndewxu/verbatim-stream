@@ -222,8 +222,8 @@ interface TranscriberHook {
 
 | 变量 | 用途 |
 |------|------|
-| `VITE_SUPABASE_URL` | Supabase 项目 URL |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase 匿名密钥 |
+| `VITE_SUPABASE_URL` | 后端项目 URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | 后端匿名密钥 |
 | `OPENAI_API_KEY`（服务端） | OpenAI API 密钥，用于翻译和精炼 |
 | `ELEVENLABS_API_KEY`（服务端） | ElevenLabs API 密钥，用于 TTS 和 STT Token |
 | `DEEPGRAM_API_KEY`（服务端） | Deepgram API 密钥，用于 STT Token |
