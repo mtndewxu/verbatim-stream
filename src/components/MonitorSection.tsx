@@ -112,11 +112,11 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
                 {entry.translated && (
                   <button
                     onClick={() => handlePlay(entry.id, entry.translated)}
-                    disabled={playingId !== null}
+                    disabled={playingId !== null && playingId !== entry.id}
                     className="p-1 rounded-full hover:bg-secondary transition-colors disabled:opacity-40"
-                    aria-label="Play translation"
+                    aria-label={playingId === entry.id ? "Stop playback" : "Play translation"}
                   >
-                    <Volume2 className={`w-3.5 h-3.5 ${playingId === entry.id ? "text-primary animate-pulse" : "text-muted-foreground"}`} />
+                    <Volume2 className={`w-3.5 h-3.5 ${playingId === entry.id ? "text-destructive animate-pulse" : "text-muted-foreground"}`} />
                   </button>
                 )}
               </div>
