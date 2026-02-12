@@ -46,7 +46,7 @@ export function ConsoleSection({
           value={speechText}
           onChange={(e) => onSpeechChange(e.target.value)}
           placeholder="Tap the mic to start speaking..."
-          className="w-full bg-secondary/50 rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
+          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
         />
       </div>
 
@@ -59,7 +59,7 @@ export function ConsoleSection({
           value={translationText}
           readOnly
           placeholder="Translation will appear here"
-          className="w-full bg-secondary/50 rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
+          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
         />
       </div>
 
