@@ -53,13 +53,17 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
   const [playingId, setPlayingId] = useState<string | null>(null);
 
   const handlePlay = async (id: string, text: string) => {
-    if (playingId) return;
+    if (playingId && playingId !== id) return;
+    if (playingId === id) {
+      await playTranslation(text);
+      setPlayingId(null);
+      return;
+    }
     setPlayingId(id);
     try {
-      await playTranslation(text);
+      const started = await playTranslation(text, () => setPlayingId(null));
+      if (!started) setPlayingId(null);
     } catch {
-      // ignore
-    } finally {
       setPlayingId(null);
     }
   };
