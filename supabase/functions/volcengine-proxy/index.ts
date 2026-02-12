@@ -89,6 +89,15 @@ const EVT_SESSION_FAILED  = 153;
 const EVT_SESSION_FINISHED = 152;
 const EVT_USAGE_RESPONSE  = 154;
 const EVT_TASK_REQUEST    = 200;
+const EVT_AUDIO_MUTED     = 250;
+
+// AST translation events (600-699)
+const EVT_SRC_SUBTITLE_START = 650;
+const EVT_SRC_SUBTITLE_RESP  = 651;  // partial source text (word by word)
+const EVT_SRC_SUBTITLE_END   = 652;  // final source text (complete utterance)
+const EVT_TGT_SUBTITLE_START = 653;
+const EVT_TGT_SUBTITLE_RESP  = 654;  // partial translation (word by word)
+const EVT_TGT_SUBTITLE_END   = 655;  // final translation (complete)
 
 // ── Message builders (field numbers from .proto files) ──
 
@@ -259,7 +268,10 @@ Deno.serve(async (req) => {
 
   let volcSocket: any = null;
   let sessionStarted = false;
-  let lastText = "";
+  // Accumulate source and translation text per sequence
+  let currentSrcText = "";
+  let currentTgtText = "";
+  let currentSeq = 0;
 
   clientSocket.onopen = () => {
     console.log("[VolcProxy] Client connected, opening Volcengine WSS…");
@@ -283,7 +295,6 @@ Deno.serve(async (req) => {
       try {
         const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
         const resp = parseResponse(bytes);
-        console.log(`[VolcProxy] evt=${resp.event} seq=${resp.sequence} status=${resp.statusCode} text="${resp.text.substring(0, 80)}" msg="${resp.message.substring(0, 80)}"`);
 
         if (resp.event === EVT_SESSION_STARTED) {
           sessionStarted = true;
@@ -296,25 +307,54 @@ Deno.serve(async (req) => {
 
         } else if (resp.event === EVT_SESSION_FINISHED) {
           console.log("[VolcProxy] Session finished");
-          if (resp.text && resp.text !== lastText) {
-            clientSocket.send(JSON.stringify({ type: "final", text: resp.text }));
-          }
           try { clientSocket.close(1000, "Session finished"); } catch {}
 
-        } else if (resp.event === EVT_USAGE_RESPONSE) {
-          console.log("[VolcProxy] Usage response");
+        } else if (resp.event === EVT_USAGE_RESPONSE || resp.event === EVT_AUDIO_MUTED) {
+          // Ignore
 
-        } else {
-          // TaskResponse or other data — forward text
-          if (resp.text) {
-            const isFinal = resp.text.length > lastText.length;
-            lastText = resp.text;
-            clientSocket.send(JSON.stringify({
-              type: isFinal ? "final" : "partial",
-              text: resp.text,
-              sequence: resp.sequence,
-            }));
+        } else if (resp.event === EVT_SRC_SUBTITLE_START) {
+          // New source utterance starting
+          if (resp.sequence !== currentSeq) {
+            currentSrcText = "";
+            currentTgtText = "";
+            currentSeq = resp.sequence;
           }
+
+        } else if (resp.event === EVT_SRC_SUBTITLE_RESP) {
+          // Partial source text (word by word) — accumulate
+          currentSrcText += resp.text;
+          clientSocket.send(JSON.stringify({
+            type: "partial",
+            text: currentSrcText,
+            sequence: resp.sequence,
+          }));
+
+        } else if (resp.event === EVT_SRC_SUBTITLE_END) {
+          // Final source text for this utterance
+          currentSrcText = resp.text || currentSrcText;
+          clientSocket.send(JSON.stringify({
+            type: "final",
+            text: currentSrcText,
+            sequence: resp.sequence,
+          }));
+
+        } else if (resp.event === EVT_TGT_SUBTITLE_RESP) {
+          // Partial translation (word by word) — accumulate
+          currentTgtText += resp.text;
+          clientSocket.send(JSON.stringify({
+            type: "translation_partial",
+            translation: currentTgtText,
+            sequence: resp.sequence,
+          }));
+
+        } else if (resp.event === EVT_TGT_SUBTITLE_END) {
+          // Final translation
+          currentTgtText = resp.text || currentTgtText;
+          clientSocket.send(JSON.stringify({
+            type: "translation_final",
+            translation: currentTgtText,
+            sequence: resp.sequence,
+          }));
         }
       } catch (e) {
         console.error("[VolcProxy] Parse error:", e);
