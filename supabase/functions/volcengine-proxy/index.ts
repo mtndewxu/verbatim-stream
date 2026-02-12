@@ -308,8 +308,11 @@ Deno.serve(async (req) => {
     volcSocket.on("message", (data: Buffer | Uint8Array) => {
       try {
         const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        // Debug: log first 64 bytes as hex
+        const hexDump = Array.from(bytes.slice(0, 64)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        console.log(`[VolcProxy] Raw response (${bytes.length} bytes): ${hexDump}`);
         const resp = parseTranslateResponse(bytes);
-        console.log(`[VolcProxy] Event=${resp.event}, seq=${resp.sequence}, text="${resp.text}", status=${resp.statusCode}`);
+        console.log(`[VolcProxy] Event=${resp.event}, seq=${resp.sequence}, text="${resp.text}", status=${resp.statusCode}, msg="${resp.message}"`);
 
         if (resp.event === EVENT_SESSION_STARTED) {
           sessionStarted = true;
