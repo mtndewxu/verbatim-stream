@@ -1,4 +1,6 @@
 // @ts-nocheck — Deno edge function
+import WS from "npm:ws";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -7,7 +9,7 @@ const corsHeaders = {
 
 // Volcengine 同传 endpoint
 const VOLC_WS_ENDPOINT = "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
-const VOLC_RESOURCE_ID = "volc.service_type.10047"; // 同声传译资源ID
+const VOLC_RESOURCE_ID = "volc.service_type.10053"; // 同声传译2.0资源ID
 
 // Binary protocol constants
 const PROTOCOL_VERSION = 0x1;
@@ -213,8 +215,14 @@ Deno.serve(async (req) => {
     // Connect to Volcengine with auth headers
     // Note: Deno WebSocket doesn't support custom headers directly,
     // so we pass auth in the initial payload instead
-    volcSocket = new WebSocket(VOLC_WS_ENDPOINT);
-    volcSocket.binaryType = "arraybuffer";
+    volcSocket = new WS(VOLC_WS_ENDPOINT, {
+      headers: {
+        "X-Api-App-Key": appId,
+        "X-Api-Access-Key": accessKey,
+        "X-Api-Resource-Id": VOLC_RESOURCE_ID,
+        "X-Api-Connect-Id": connectId,
+      },
+    });
 
     volcSocket.onopen = async () => {
       console.log("[VolcProxy] Connected to Volcengine");
