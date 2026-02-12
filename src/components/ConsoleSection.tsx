@@ -6,6 +6,7 @@ interface ConsoleSectionProps {
   speechText: string;
   translationText: string;
   translationSegments?: string[];
+  speechSegments?: string[];
   isRecording: boolean;
   isPlaying: boolean;
   isTranslating: boolean;
@@ -25,6 +26,7 @@ export function ConsoleSection({
   speechText,
   translationText,
   translationSegments = [],
+  speechSegments = [],
   isRecording,
   isPlaying,
   isTranslating,
@@ -39,11 +41,11 @@ export function ConsoleSection({
   onToChange,
   onSwapLangs,
 }: ConsoleSectionProps) {
-  // For VC mode with segments, show segmented view
-  const showSegments = isVcMode && translationSegments.length > 0;
-  const displayTranslation = showSegments
+  const showTranslationSegments = isVcMode && translationSegments.length > 0;
+  const displayTranslation = showTranslationSegments
     ? translationSegments.join("\n")
     : translationText;
+  const showSpeechSegments = isVcMode && speechSegments.length > 0;
 
   return (
     <div className="flex flex-col gap-3 px-5 pt-4 pb-6 bg-background">
@@ -52,12 +54,24 @@ export function ConsoleSection({
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
           My Speech
         </label>
-        <textarea
-          value={speechText}
-          onChange={(e) => onSpeechChange(e.target.value)}
-          placeholder="Tap the mic to start speaking..."
-          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
-        />
+        <div className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] max-h-24 overflow-y-auto">
+          {showSpeechSegments || speechText ? (
+            <div className="flex flex-col gap-1">
+              {speechSegments.map((seg, i) => (
+                <p
+                  key={`s-${i}`}
+                  className="transition-opacity duration-500"
+                  style={{ opacity: speechText ? 0.35 : (i === speechSegments.length - 1 ? 1 : 0.35) }}
+                >
+                  {seg}
+                </p>
+              ))}
+              {speechText && <p>{speechText}</p>}
+            </div>
+          ) : (
+            <p className="text-muted-foreground">Tap the mic to start speaking...</p>
+          )}
+        </div>
       </div>
 
       {/* Translation */}
@@ -66,7 +80,7 @@ export function ConsoleSection({
           Translation {isTranslating && <span className="text-primary">• translating...</span>}
         </label>
         <div className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] max-h-24 overflow-y-auto">
-          {showSegments ? (
+          {showTranslationSegments ? (
             <div className="flex flex-col gap-1">
               {translationSegments.map((seg, i) => (
                 <p
