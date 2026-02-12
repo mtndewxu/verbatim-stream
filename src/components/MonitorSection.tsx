@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export interface ConversationEntry {
   id: string;
@@ -20,7 +20,6 @@ interface MonitorSectionProps {
   entries: ConversationEntry[];
   isMonitoring: boolean;
   activeMessage?: ActiveMessage | null;
-  activeConsoleMessage?: ActiveMessage | null;
 }
 
 function AudioWaveVisualizer() {
@@ -45,112 +44,17 @@ function AudioWaveVisualizer() {
   );
 }
 
-function MessageBubble({
-  entry,
-  isYou,
-}: {
-  entry: ConversationEntry;
-  isYou: boolean;
-}) {
-  return (
-    <div className={`flex ${isYou ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm border ${
-          isYou
-            ? "bg-primary/10 border-primary/30 backdrop-blur-md"
-            : "bg-card/70 border-border backdrop-blur-md"
-        }`}
-      >
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-          {entry.speaker}
-        </div>
-        <p className="text-sm text-foreground leading-relaxed">
-          {entry.fromFlag} {entry.original}
-        </p>
-        {entry.translated && (
-          <p
-            className={`text-sm font-semibold leading-relaxed mt-1 ${
-              isYou ? "text-primary" : "text-primary"
-            }`}
-          >
-            → {entry.toFlag} {entry.translated}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ActiveBubble({
-  msg,
-  label,
-  isYou,
-}: {
-  msg: ActiveMessage;
-  label: string;
-  isYou: boolean;
-}) {
-  if (!msg.original && !msg.interimSuffix) return null;
-  return (
-    <div className={`flex ${isYou ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm border border-l-2 ${
-          isYou
-            ? "bg-primary/10 border-primary/30 border-l-primary backdrop-blur-md"
-            : "bg-card/70 border-border border-l-destructive backdrop-blur-md"
-        }`}
-      >
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
-          {label}
-          <span
-            className={`inline-block w-1.5 h-1.5 rounded-full animate-pulse ${
-              isYou ? "bg-primary" : "bg-destructive"
-            }`}
-          />
-        </div>
-        <p className="text-sm leading-relaxed">
-          <span className="text-foreground">{msg.original}</span>
-          {msg.interimSuffix && (
-            <span className="text-muted-foreground/50">{msg.interimSuffix}</span>
-          )}
-        </p>
-        {(msg.translated || msg.interimTranslation) && (
-          <p className="text-sm leading-relaxed mt-1">
-            <span className="font-semibold text-primary">→ {msg.translated}</span>
-            {msg.interimTranslation && (
-              <span className="text-primary/40 italic"> {msg.interimTranslation}</span>
-            )}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function MonitorSection({
-  entries,
-  isMonitoring,
-  activeMessage,
-  activeConsoleMessage,
-}: MonitorSectionProps) {
+export function MonitorSection({ entries, isMonitoring, activeMessage }: MonitorSectionProps) {
   const scrollAnchor = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth" });
-  }, [
-    entries,
-    activeMessage?.original,
-    activeMessage?.interimSuffix,
-    activeMessage?.translated,
-    activeConsoleMessage?.original,
-    activeConsoleMessage?.interimSuffix,
-    activeConsoleMessage?.translated,
-  ]);
+  }, [entries, activeMessage?.original, activeMessage?.interimSuffix, activeMessage?.translated, activeMessage?.interimTranslation]);
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col bg-card/30 backdrop-blur-sm">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border/30">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Conversation
         </h2>
@@ -165,33 +69,55 @@ export function MonitorSection({
         )}
       </div>
 
-      {/* Messages — column-reverse pins latest content to bottom */}
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse">
+      {/* Messages — flex column with constrained overflow */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex flex-col px-5 py-3 gap-3">
-          {entries.length === 0 && !activeMessage && !activeConsoleMessage && (
+          {entries.length === 0 && !activeMessage && (
             <div className="flex items-center justify-center h-32">
               <p className="text-sm text-muted-foreground">
                 Start speaking to see translations here
               </p>
             </div>
           )}
-
           {entries.map((entry) => (
-            <MessageBubble
+            <div
               key={entry.id}
-              entry={entry}
-              isYou={entry.speaker === "You"}
-            />
+              className="bg-card rounded-2xl px-4 py-3 shadow-sm border border-border"
+            >
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                {entry.speaker}
+              </div>
+              <p className="text-sm text-foreground leading-relaxed">
+                {entry.fromFlag} {entry.original}
+              </p>
+              <p className="text-sm font-semibold text-primary leading-relaxed mt-1">
+                → {entry.toFlag} {entry.translated}
+              </p>
+            </div>
           ))}
 
-          {/* Active monitor message (incoming — left) */}
-          {activeMessage && (
-            <ActiveBubble msg={activeMessage} label="Speaker" isYou={false} />
-          )}
-
-          {/* Active console message (outgoing — right, in-flow at bottom) */}
-          {activeConsoleMessage && (
-            <ActiveBubble msg={activeConsoleMessage} label="You" isYou={true} />
+          {/* Active (in-progress) message block */}
+          {activeMessage && (activeMessage.original || activeMessage.interimSuffix) && (
+            <div className="bg-card rounded-2xl px-4 py-3 shadow-sm border border-border border-l-2 border-l-destructive">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
+                Speaker
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
+              </div>
+              <p className="text-sm leading-relaxed">
+                <span className="text-foreground">{activeMessage.original}</span>
+                {activeMessage.interimSuffix && (
+                  <span className="text-muted-foreground/50">{activeMessage.interimSuffix}</span>
+                )}
+              </p>
+              {(activeMessage.translated || activeMessage.interimTranslation) && (
+                <p className="text-sm leading-relaxed mt-1">
+                  <span className="font-semibold text-primary">→ {activeMessage.translated}</span>
+                  {activeMessage.interimTranslation && (
+                    <span className="text-primary/40 italic"> {activeMessage.interimTranslation}</span>
+                  )}
+                </p>
+              )}
+            </div>
           )}
 
           {/* Scroll anchor */}

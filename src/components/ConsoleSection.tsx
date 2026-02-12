@@ -36,7 +36,7 @@ export function ConsoleSection({
   onSwapLangs,
 }: ConsoleSectionProps) {
   return (
-    <div className="flex flex-col gap-3 px-5 pt-4 pb-6 bg-card/50 backdrop-blur-xl border-t border-border/30">
+    <div className="glass-panel flex flex-col gap-3 px-5 pt-4 pb-6">
       {/* My Speech */}
       <div>
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
