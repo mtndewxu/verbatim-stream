@@ -1,54 +1,71 @@
 
 
-# 🌐 Real-Time Voice Translator App
+# Improve Translation Accuracy
 
-A beautifully designed, Apple-inspired voice translation app with real-time transcription, AI-powered translation, and ElevenLabs voice cloning.
+## Problem
 
----
+Both Monitor and Console modes currently translate each Deepgram `is_final` segment independently:
 
-## 1. App Layout & Design
-- **Apple-minimalist aesthetic** with system sans-serif fonts, light gray (#F9F9F9) background
-- **Two-panel split layout**: Monitor (60% top) + Console (40% bottom), full-screen mobile-native feel (`h-screen`, `overflow-hidden`)
-- **Glassmorphism console panel** at bottom with backdrop blur and subtle shadow
-- Fully responsive — looks and feels like a native iOS/Android app on mobile
+```
+Segment 1: "I want to" -> translated alone -> "我想"
+Segment 2: "go to the store" -> translated alone -> "去商店"
+Result: "我想 去商店" (concatenated, no coherence)
+```
 
-## 2. Monitor Section (Top — Conversation History)
-- Scrollable container showing all past transcription + translation pairs
-- Each bubble displays: **[Speaker Name] Original text → Translated text** (bold, high-contrast)
-- Auto-scrolls to latest message as new content arrives
+Deepgram segments are often just 2-5 words -- far too short for GPT to produce natural, contextual translations. The translations are then naively concatenated with spaces, which further degrades quality for Chinese (which has no word spaces).
 
-## 3. Console Section (Bottom — Controls)
-- **Row 1 — "My Speech"**: Editable text area with live transcription appearing word-by-word (Web Speech API)
-- **Row 2 — "Translation"**: Read-only area showing translated result
-- **Row 3 — Action Buttons**:
-  - 🎤 **Record** (large, circular, pulsing animation when active, haptic feedback on tap)
-  - 🔊 **Play** (sends translation to ElevenLabs voice cloning, plays audio)
-  - 🗑️ **Clear** (resets current speech/translation fields)
-- **Language Picker**: Pill-shaped selector with country flags (e.g., 🇨🇳 CN ⇄ EN 🇺🇸), supporting multiple language pairs (CN, EN, JP, KR, ES, FR, etc.)
+## Solution: Full-Context Re-translation
 
-## 4. Real-Time Transcription
-- Uses the **Web Speech API** for instant, on-device speech-to-text
-- Text appears word-by-word as the user speaks
-- No network latency for the transcription step
+Instead of translating each segment in isolation, re-translate the **entire accumulated original text** each time a new `is_final` segment arrives. This gives GPT the full semantic context, producing a single coherent translation.
 
-## 5. AI Translation (Lovable AI via Cloud)
-- When the user stops recording, the transcribed text is sent to a **Lovable Cloud edge function** that calls the AI gateway for translation
-- Supports all configured language pairs with automatic direction detection
-- Result populates the "Translation" area instantly
+```
+Segment 1 arrives: translate("I want to") -> "我想"
+Segment 2 arrives: translate("I want to go to the store") -> "我想去商店"
+```
 
-## 6. Voice Cloning Playback (ElevenLabs)
-- **Play button** sends the translated text to an **ElevenLabs TTS edge function** using a configured Voice ID
-- Audio streams back and plays in the browser
-- API key and Voice ID stored securely as Cloud secrets
+This trades slightly more API calls (same number, but longer input) for dramatically better translation quality.
 
-## 7. Global Monitor Mode
-- A **toggle switch** at the top to enable continuous background listening
-- When active, the mic stays on — continuously transcribing and translating everything heard
-- Results feed into the Monitor (top section) conversation history automatically
-- Visual indicator showing the monitor is active
+## Changes
 
-## 8. Backend (Lovable Cloud Edge Functions)
-- **translate** — Receives text + language pair, calls Lovable AI gateway, returns translation
-- **elevenlabs-tts** — Receives translated text + Voice ID, calls ElevenLabs API, streams audio back
-- Secrets managed securely: `ELEVENLABS_API_KEY`, `VOICE_ID`
+### 1. Console Mode (`src/pages/Index.tsx`, lines ~148-164)
+
+Replace segment-only translation with full-text re-translation:
+
+- Instead of `translateText(segment, ...)`, call `translateText(consoleFinalRef.current, ...)`
+- Replace `consoleTranslatedRef.current` entirely with the new result (not append)
+- Cancel any in-flight translation when a new segment arrives (use an incrementing request ID to discard stale results)
+
+### 2. Monitor Mode (`src/pages/Index.tsx`, lines ~252-267)
+
+Same pattern:
+
+- Instead of `translateText(segment, ...)`, call `translateText(activeFinalRef.current, ...)`
+- Replace `activeTranslatedRef.current` entirely with the new result
+- Use request ID to discard stale out-of-order responses
+
+### 3. Stale Response Handling
+
+Add a `useRef` counter (e.g., `consoleTranslationSeq` and `monitorTranslationSeq`) that increments on each translation request. When the response arrives, only apply it if the sequence number matches the latest. This prevents older, shorter translations from overwriting newer, longer ones.
+
+### 4. Translation Prompt Tweak (`supabase/functions/translate/index.ts`)
+
+Update the system prompt to better handle full utterances:
+
+- Add: "Translate the complete utterance as a whole. Do not add spaces between Chinese characters."
+- This reinforces coherent output now that we're sending complete text.
+
+## Technical Details
+
+```text
+Before (segment-by-segment):
+  Segment -> translateText(segment) -> append result
+
+After (full-context):
+  Segment -> accumulatedText += segment
+          -> seqId++
+          -> translateText(accumulatedText)
+          -> if seqId matches latest, replace entire translation
+```
+
+No new dependencies. No database changes. The number of API calls stays the same (one per `is_final`), but each call sends the full accumulated text for maximum context.
 
