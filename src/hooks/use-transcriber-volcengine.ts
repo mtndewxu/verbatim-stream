@@ -109,10 +109,18 @@ export function useVolcengineTranscriber() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data as string);
-          if (msg.type === "partial" || msg.type === "final") {
-            const isFinal = msg.type === "final";
-            if (msg.text) onResultRef.current?.(msg.text, isFinal);
-            if (msg.translation) onTranslationRef.current?.(msg.translation, isFinal);
+          if (msg.type === "partial") {
+            // Source text (partial)
+            onResultRef.current?.(msg.text, false);
+          } else if (msg.type === "final") {
+            // Source text (final)
+            onResultRef.current?.(msg.text, true);
+          } else if (msg.type === "translation_partial") {
+            // Translation (partial)
+            onTranslationRef.current?.(msg.translation, false);
+          } else if (msg.type === "translation_final") {
+            // Translation (final)
+            onTranslationRef.current?.(msg.translation, true);
           } else if (msg.type === "error") {
             console.error("[Volc] Server error:", msg.message);
             onErrorRef.current?.(msg.message || "Volcengine error");
