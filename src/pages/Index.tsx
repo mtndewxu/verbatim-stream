@@ -19,6 +19,7 @@ const Index = () => {
   const [speechText, setSpeechText] = useState("");
   const [translationText, setTranslationText] = useState("");
   const [translationSegments, setTranslationSegments] = useState<string[]>([]);
+  const [speechSegments, setSpeechSegments] = useState<string[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -171,6 +172,7 @@ const Index = () => {
       setSpeechText("");
       setTranslationText("");
       setTranslationSegments([]);
+      setSpeechSegments([]);
       isRecordingRef.current = true;
       setIsRecording(true);
 
@@ -189,9 +191,13 @@ const Index = () => {
             setTranslationText(translation);
           }
         });
-        // When language auto-switches, reset accumulated text so languages don't mix
+        // When language auto-switches, archive current speech & reset
         vcConsole.setOnLangDetected((_detectedLang) => {
-          console.log("[Index] Language switched, resetting accumulated text");
+          console.log("[Index] Language switched, archiving current speech");
+          const currentSpeech = consoleFinalRef.current.trim();
+          if (currentSpeech) {
+            setSpeechSegments(prev => [...prev, currentSpeech].slice(-3));
+          }
           finalTextRef.current = "";
           consoleFinalRef.current = "";
           consoleTranslatedRef.current = "";
@@ -421,6 +427,7 @@ const Index = () => {
         speechText={speechText}
         translationText={translationText}
         translationSegments={translationSegments}
+        speechSegments={speechSegments}
         isRecording={isRecording}
         isPlaying={isPlaying}
         isTranslating={isTranslating}
