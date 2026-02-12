@@ -91,15 +91,15 @@ export function useVolcengineTranscriber() {
           onResultRef.current?.(msg.text, false);
         } else if (msg.type === "final") {
           onResultRef.current?.(msg.text, true);
-          // Check language detection for auto-reconnect
-          if (msg.detected_lang && !hasReconnectedRef.current) {
-            onLangDetectedRef.current?.(msg.detected_lang);
-            // If detected language doesn't match current source, need to swap
-            if (msg.detected_lang !== currentSourceRef.current) {
+          if (msg.detected_lang) {
+            if (msg.detected_lang !== currentSourceRef.current && !hasReconnectedRef.current) {
               console.log(`[Volc] Language mismatch: expected ${currentSourceRef.current}, detected ${msg.detected_lang}. Auto-reconnecting…`);
               hasReconnectedRef.current = true;
-              // Auto-reconnect with swapped languages
+              onLangDetectedRef.current?.(msg.detected_lang);
               autoReconnect();
+            } else if (msg.detected_lang === currentSourceRef.current && hasReconnectedRef.current) {
+              // Confirmed correct language after reconnect — allow future switches
+              hasReconnectedRef.current = false;
             }
           }
         } else if (msg.type === "translation_partial") {
