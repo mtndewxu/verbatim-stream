@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
@@ -7,8 +7,6 @@ import { translateText } from "@/lib/translate";
 import { playTranslation } from "@/lib/tts";
 import { getLanguage, type Language } from "@/lib/languages";
 import { toast } from "@/hooks/use-toast";
-
-const PAUSE_THRESHOLD_MS = 3000; // 3 seconds of silence → finalize message block
 
 const Index = () => {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
@@ -21,7 +19,7 @@ const Index = () => {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
 
-  // Active message state for continuous merging
+  // Active message state for continuous merging — single block per session
   const [activeMessage, setActiveMessage] = useState<{
     original: string;
     interimSuffix: string;
@@ -34,18 +32,23 @@ const Index = () => {
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
 
-  // Monitor merging refs
-  const activeFinalRef = useRef(""); // accumulated finalized text in current block
-  const activeTranslatedRef = useRef(""); // accumulated translation of finalized text
-  const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monitor merging refs — one block for entire session, no pause timer
+  const activeFinalRef = useRef("");
+  const activeTranslatedRef = useRef("");
   const interimTranslateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInterimTranslated = useRef("");
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
+  const conversationBottomRef = useRef<HTMLDivElement>(null);
 
   // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
+
+  // Auto-scroll whenever activeMessage or entries change
+  useEffect(() => {
+    conversationBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [entries, activeMessage]);
 
   const haptic = () => {
     if (navigator.vibrate) navigator.vibrate(10);
@@ -88,13 +91,12 @@ const Index = () => {
     []
   );
 
-  // Finalize the current active message block → move to entries
+  // Finalize the active block → move to entries (only called when monitor stops)
   const finalizeActiveBlock = useCallback(() => {
     const text = activeFinalRef.current.trim();
     const translated = activeTranslatedRef.current.trim();
     if (text) {
       addEntry(text, translated, fromLangRef.current, toLangRef.current, "Speaker");
-      // Auto-play the final translation
       if (translated) {
         playTranslation(translated).catch(() => {});
       }
@@ -108,14 +110,6 @@ const Index = () => {
       interimTranslateTimer.current = null;
     }
   }, [addEntry]);
-
-  // Reset pause timer (call on every transcript received)
-  const resetPauseTimer = useCallback(() => {
-    if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
-    pauseTimerRef.current = setTimeout(() => {
-      finalizeActiveBlock();
-    }, PAUSE_THRESHOLD_MS);
-  }, [finalizeActiveBlock]);
 
   const handleRecord = useCallback(() => {
     haptic();
@@ -199,6 +193,7 @@ const Index = () => {
       haptic();
       setIsMonitoring(checked);
       if (checked) {
+        // Start fresh — single active block for entire session
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
         setActiveMessage(null);
@@ -206,10 +201,8 @@ const Index = () => {
         const monitor = new DeepgramTranscriber(
           fromLang.speechCode,
           (text, isFinal) => {
-            resetPauseTimer();
-
             if (isFinal) {
-              // Append finalized text to active block
+              // Append finalized text to the single active block
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
@@ -220,7 +213,7 @@ const Index = () => {
                 interimTranslateTimer.current = null;
               }
 
-              // Update active message: solid original, clear interim suffix
+              // Update active message: solid original, no interim suffix
               setActiveMessage({
                 original: finalSoFar,
                 interimSuffix: "",
@@ -228,7 +221,7 @@ const Index = () => {
                 interimTranslation: "",
               });
 
-              // Translate the full finalized text
+              // Parallel translation: translate immediately on isFinal, don't wait
               translateText(finalSoFar, fromLangRef.current.name, toLangRef.current.name)
                 .then((t) => {
                   activeTranslatedRef.current = t;
@@ -238,7 +231,7 @@ const Index = () => {
                 })
                 .catch(() => {});
             } else {
-              // Interim: show as dimmed suffix
+              // Interim: show as dimmed suffix for immediate visual feedback
               const interimSuffix = " " + text;
               const fullPreview = (activeFinalRef.current + text).trim();
 
@@ -249,14 +242,13 @@ const Index = () => {
                 interimTranslation: prev?.interimTranslation || "",
               }));
 
-              // Zero-latency: translate interim immediately with debounce
+              // Zero-latency: translate interim with short debounce
               if (interimTranslateTimer.current) clearTimeout(interimTranslateTimer.current);
               if (fullPreview.length > 5 && fullPreview !== lastInterimTranslated.current) {
                 interimTranslateTimer.current = setTimeout(() => {
                   lastInterimTranslated.current = fullPreview;
                   translateText(fullPreview, fromLangRef.current.name, toLangRef.current.name)
                     .then((t) => {
-                      // Only show the part beyond the already-translated final text
                       const existingTranslation = activeTranslatedRef.current;
                       const interimExtra = existingTranslation
                         ? t.replace(existingTranslation, "").trim()
@@ -266,7 +258,7 @@ const Index = () => {
                       );
                     })
                     .catch(() => {});
-                }, 200);
+                }, 150);
               }
             }
           },
@@ -280,12 +272,7 @@ const Index = () => {
         monitorRef.current = monitor;
         monitor.start();
       } else {
-        // Stop
-        if (pauseTimerRef.current) {
-          clearTimeout(pauseTimerRef.current);
-          pauseTimerRef.current = null;
-        }
-        // Finalize any remaining active block
+        // Stop — finalize remaining active block into entries
         finalizeActiveBlock();
         monitorRef.current?.stop();
         monitorRef.current = null;
@@ -295,7 +282,7 @@ const Index = () => {
         }
       }
     },
-    [fromLang, toLang, resetPauseTimer, finalizeActiveBlock]
+    [fromLang, toLang, finalizeActiveBlock]
   );
 
   return (
