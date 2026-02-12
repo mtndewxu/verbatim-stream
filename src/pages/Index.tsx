@@ -341,6 +341,7 @@ const Index = () => {
       {/* Guide card */}
       <div className="px-5 py-2">
         <div className="rounded-2xl px-4 py-3 text-[11px] leading-relaxed text-muted-foreground bg-card/40 backdrop-blur-md border border-border/30">
+          <span className="font-semibold text-foreground/70">📖 Guide</span>{" · "}
           <span className="font-semibold text-foreground/70">Incoming:</span> Enable Monitor to translate the other party. Turn off after the session.{" "}
           <span className="font-semibold text-foreground/70">Outgoing:</span> Tap Speaker for your turn; use the Loudspeaker icon for playback.
         </div>
