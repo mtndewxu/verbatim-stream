@@ -176,6 +176,11 @@ export function MonitorSection({
             </div>
           )}
 
+          {/* Active console message (outgoing — pinned to top) */}
+          {activeConsoleMessage && (
+            <ActiveBubble msg={activeConsoleMessage} label="You" isYou={true} />
+          )}
+
           {entries.map((entry) => (
             <MessageBubble
               key={entry.id}
@@ -187,11 +192,6 @@ export function MonitorSection({
           {/* Active monitor message (incoming — left) */}
           {activeMessage && (
             <ActiveBubble msg={activeMessage} label="Speaker" isYou={false} />
-          )}
-
-          {/* Active console message (outgoing — right) */}
-          {activeConsoleMessage && (
-            <ActiveBubble msg={activeConsoleMessage} label="You" isYou={true} />
           )}
 
           {/* Scroll anchor */}
