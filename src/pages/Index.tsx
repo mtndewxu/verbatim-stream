@@ -174,7 +174,7 @@ const Index = () => {
       isRecordingRef.current = true;
       setIsRecording(true);
 
-      // If Volcengine, set translation callback (auto zh↔en)
+      // If Volcengine, set translation callback and lang-switch handler
       if (sttEngine === "volcengine") {
         vcConsole.setOnTranslation((translation, isFinal) => {
           if (isFinal) {
@@ -188,6 +188,15 @@ const Index = () => {
           } else {
             setTranslationText(translation);
           }
+        });
+        // When language auto-switches, reset accumulated text so languages don't mix
+        vcConsole.setOnLangDetected((_detectedLang) => {
+          console.log("[Index] Language switched, resetting accumulated text");
+          finalTextRef.current = "";
+          consoleFinalRef.current = "";
+          consoleTranslatedRef.current = "";
+          setSpeechText("");
+          setTranslationText("");
         });
       }
 

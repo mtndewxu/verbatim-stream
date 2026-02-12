@@ -88,9 +88,9 @@ export function ConsoleSection({
 
       {/* Language Picker — hidden in VC mode, replaced with auto badge */}
       {isVcMode ? (
-        <div className="flex items-center justify-center py-1">
-          <span className="text-[11px] font-medium text-muted-foreground bg-muted px-3 py-1 rounded-full">
-            🇨🇳 中 ↔ EN 🇬🇧 · 自动识别
+        <div className="flex items-center justify-center py-1.5">
+          <span className="text-sm font-medium text-muted-foreground bg-muted px-4 py-1.5 rounded-full">
+            🇨🇳 中 ↔ EN 🇬🇧 · Auto Detect
           </span>
         </div>
       ) : (
