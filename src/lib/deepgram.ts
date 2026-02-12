@@ -1,37 +1,12 @@
 import { toast } from "@/hooks/use-toast";
 
-const TOKEN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepgram-token`;
+const PROXY_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepgram-proxy`;
 
 type TranscriptCallback = (text: string, isFinal: boolean) => void;
 
-// Token cache — avoids re-fetching during the 50s window
-let cachedKey: string | null = null;
-let cacheExpiry = 0;
-const CACHE_TTL_MS = 50_000; // 50s (edge fn returns keys valid ~60s)
-
-async function getDeepgramKey(): Promise<string> {
-  if (cachedKey && Date.now() < cacheExpiry) {
-    console.log("[Deepgram] Using cached API key");
-    return cachedKey;
-  }
-  console.log("[Deepgram] Fetching temporary API key from edge function…");
-  const resp = await fetch(TOKEN_URL, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
-  });
-  if (!resp.ok) throw new Error("Failed to get Deepgram token");
-  const data = await resp.json();
-  cachedKey = data.key;
-  cacheExpiry = Date.now() + CACHE_TTL_MS;
-  console.log("[Deepgram] Temporary API key obtained ✓");
-  return data.key;
-}
-
-/** Pre-warm the token cache so start() doesn't wait for the fetch. */
+/** Pre-warm is no longer needed (no token fetch), but keep export for compat. */
 export function prefetchDeepgramToken(): void {
-  getDeepgramKey().catch(() => {});
+  // No-op: proxy handles auth server-side
 }
 
 export class DeepgramTranscriber {
@@ -79,13 +54,8 @@ export class DeepgramTranscriber {
         console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
       }
 
-      // Parallelize: setup audio pipeline AND fetch token simultaneously
-      // Audio is buffered during WS handshake via preConnectBuffer
-      const keyPromise = getDeepgramKey();
       await this.setupAudioWorklet();
-      const key = await keyPromise;
-      // Now open WS with the already-fetched key
-      await this.connectWebSocketWithKey(key);
+      this.connectToProxy();
     } catch (e: any) {
       console.error("[Deepgram] Start error:", e);
       this.running = false;
@@ -118,42 +88,46 @@ export class DeepgramTranscriber {
     console.log("[Deepgram] AudioWorklet pipeline ready (linear16, 16kHz)");
   }
 
-  private async connectWebSocket() {
-    const key = await getDeepgramKey();
-    return this.connectWebSocketWithKey(key);
-  }
-
-  private connectWebSocketWithKey(key: string) {
+  private connectToProxy() {
     const dgLang = this.mapLang(this.lang);
 
-    // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
-    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
+    // Connect to our server-side proxy instead of directly to Deepgram
+    const wsUrl = PROXY_BASE
+      .replace("https://", "wss://")
+      .replace("http://", "ws://")
+      + `?language=${dgLang}`;
 
-    console.log("[Deepgram] Opening WebSocket:", wsUrl);
-
-    // Browser WebSockets can't set custom headers, so use Sec-WebSocket-Protocol
-    // to pass auth: ["token", "<key>"] — Deepgram's recommended browser method
-    this.ws = new WebSocket(wsUrl, ["token", key]);
+    console.log("[Deepgram] Connecting to proxy:", wsUrl);
+    this.ws = new WebSocket(wsUrl);
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
-      console.log("[Deepgram] WebSocket connected ✓ (attempt", this.reconnectAttempts, ")");
-      this.reconnectAttempts = 0;
-      this.retryToastShown = false;
-
-      // Flush any audio buffered during the handshake
-      if (this.preConnectBuffer.length > 0) {
-        console.log(`[Deepgram] Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
-        for (const chunk of this.preConnectBuffer) {
-          this.ws!.send(chunk);
-        }
-        this.preConnectBuffer = [];
-      }
+      console.log("[Deepgram] Proxy WebSocket connected ✓");
+      // Don't flush yet — wait for proxy_ready signal
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data as string);
+
+        // Proxy ready signal — flush buffered audio
+        if (data.type === "proxy_ready") {
+          console.log("[Deepgram] Proxy ready, flushing", this.preConnectBuffer.length, "buffered chunks");
+          this.reconnectAttempts = 0;
+          this.retryToastShown = false;
+          for (const chunk of this.preConnectBuffer) {
+            this.ws!.send(chunk);
+          }
+          this.preConnectBuffer = [];
+          return;
+        }
+
+        if (data.type === "error") {
+          console.error("[Deepgram] Proxy error:", data.message);
+          return;
+        }
+
+        // Standard Deepgram responses
         if (data.type === "Metadata") {
           console.log("[Deepgram] Metadata received — request_id:", data.request_id, "model:", data.model_info?.name);
           return;
@@ -170,11 +144,11 @@ export class DeepgramTranscriber {
     };
 
     this.ws.onerror = (event) => {
-      console.error("[Deepgram] WebSocket error event fired:", event);
+      console.error("[Deepgram] Proxy WebSocket error:", event);
     };
 
     this.ws.onclose = (event) => {
-      console.log(`[Deepgram] WebSocket closed — code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean}`);
+      console.log(`[Deepgram] Proxy WebSocket closed — code: ${event.code}, reason: "${event.reason}"`);
       if (this.running) {
         this.scheduleReconnect();
       } else {
@@ -192,7 +166,6 @@ export class DeepgramTranscriber {
       return;
     }
 
-    // Show toast once when retrying begins
     if (!this.retryToastShown) {
       this.retryToastShown = true;
       toast({ title: "Connection retrying…", description: "Deepgram WebSocket reconnecting" });
@@ -202,11 +175,10 @@ export class DeepgramTranscriber {
     this.reconnectAttempts++;
     console.log(`[Deepgram] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})…`);
 
-    // Fresh key will be fetched on each reconnect (temp keys are short-lived)
-    this.reconnectTimer = setTimeout(async () => {
+    this.reconnectTimer = setTimeout(() => {
       if (!this.running) return;
       try {
-        await this.connectWebSocket();
+        this.connectToProxy();
       } catch (e: any) {
         console.error("[Deepgram] Reconnect failed:", e);
         this.scheduleReconnect();
@@ -262,7 +234,6 @@ export class DeepgramTranscriber {
         this.reconnectTimer = null;
       }
 
-      // Stop audio input but keep WS open to receive remaining finals
       this.workletNode?.disconnect();
       this.workletNode = null;
 
@@ -281,7 +252,6 @@ export class DeepgramTranscriber {
         return;
       }
 
-      // Timeout safety net
       const timer = setTimeout(() => {
         console.log("[Deepgram] Graceful stop timed out, forcing close");
         this.ws?.close();
@@ -289,43 +259,28 @@ export class DeepgramTranscriber {
         resolve();
       }, timeoutMs);
 
-      // Listen for WS close (Deepgram closes after flushing finals)
       const origOnClose = this.ws.onclose;
       this.ws.onclose = (event) => {
         clearTimeout(timer);
         console.log("[Deepgram] WS closed gracefully after flush");
-        // Still fire original handler for any remaining messages
         if (origOnClose) origOnClose.call(this.ws, event);
         this.ws = null;
         resolve();
       };
 
-      // Send CloseStream to tell Deepgram to flush remaining audio
       this.ws.send(JSON.stringify({ type: "CloseStream" }));
     });
   }
 
   private mapLang(speechCode: string): string {
     const map: Record<string, string> = {
-      "zh-CN": "zh",
-      "zh-TW": "zh-TW",
-      "en-US": "en",
-      "en-GB": "en",
-      "ja": "ja",
-      "ko": "ko",
-      "es-ES": "es",
-      "fr-FR": "fr",
-      "de-DE": "de",
-      "pt-BR": "pt-BR",
-      "ru-RU": "ru",
-      "ar-SA": "ar",
-      "hi-IN": "hi",
-      "it-IT": "it",
+      "zh-CN": "zh", "zh-TW": "zh-TW", "en-US": "en", "en-GB": "en",
+      "ja": "ja", "ko": "ko", "es-ES": "es", "fr-FR": "fr",
+      "de-DE": "de", "pt-BR": "pt-BR", "ru-RU": "ru", "ar-SA": "ar",
+      "hi-IN": "hi", "it-IT": "it",
     };
     return map[speechCode] || speechCode.split("-")[0];
   }
 
-  get supported() {
-    return true;
-  }
+  get supported() { return true; }
 }
