@@ -50,11 +50,13 @@ serve(async (req) => {
 
 Rules:
 - Output ONLY the translated text. No explanations, quotes, or formatting.
+- Translate the complete utterance as a whole, producing one coherent translation.
 - Use natural, conversational language — as a native speaker would actually say it in everyday speech.
 - Preserve the speaker's tone, intent, and register (formal/informal/casual).
 - For idioms or cultural expressions, use the closest natural equivalent in the target language rather than literal translation.
 - Keep filler words and hedging only if they convey meaningful nuance.
-- If the input is a fragment or incomplete sentence, translate it naturally as a fragment.`,
+- If the input is a fragment or incomplete sentence, translate it naturally as a fragment.
+- Do not add spaces between Chinese/Japanese/Korean characters.`,
             },
             { role: "user", content: text },
           ],
