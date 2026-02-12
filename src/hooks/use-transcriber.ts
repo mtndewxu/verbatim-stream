@@ -1,12 +1,20 @@
 import { useScribe, CommitStrategy } from "@elevenlabs/react";
 import { useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 
 type TranscriptCallback = (text: string, isFinal: boolean) => void;
 
 const TOKEN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-scribe-token`;
 
+// Token pre-cache (single-use tokens are valid ~15min, but we refresh every 10min)
+let cachedToken: string | null = null;
+let cacheExpiry = 0;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
 async function getScribeToken(): Promise<string> {
+  if (cachedToken && Date.now() < cacheExpiry) {
+    console.log("[Scribe] Using cached token");
+    return cachedToken;
+  }
   console.log("[Scribe] Fetching single-use token…");
   const resp = await fetch(TOKEN_URL, {
     headers: {
@@ -16,11 +24,18 @@ async function getScribeToken(): Promise<string> {
   });
   if (!resp.ok) throw new Error("Failed to get Scribe token");
   const data = await resp.json();
+  cachedToken = data.token;
+  cacheExpiry = Date.now() + CACHE_TTL_MS;
   console.log("[Scribe] Token obtained ✓");
   return data.token;
 }
 
-export function useTranscriber() {
+/** Pre-warm the token cache on mount. */
+export function prefetchScribeToken(): void {
+  getScribeToken().catch(() => {});
+}
+
+export function useElevenLabsTranscriber() {
   const onResultRef = useRef<TranscriptCallback | null>(null);
   const onErrorRef = useRef<((error: string) => void) | null>(null);
   const langRef = useRef("en");
@@ -41,12 +56,8 @@ export function useTranscriber() {
       console.error("[Scribe] Error:", msg);
       onErrorRef.current?.(msg);
     },
-    onConnect: () => {
-      console.log("[Scribe] Connected ✓");
-    },
-    onDisconnect: () => {
-      console.log("[Scribe] Disconnected");
-    },
+    onConnect: () => console.log("[Scribe] Connected ✓"),
+    onDisconnect: () => console.log("[Scribe] Disconnected"),
   });
 
   const start = useCallback(async (
@@ -59,6 +70,9 @@ export function useTranscriber() {
     langRef.current = langCode;
 
     try {
+      // Invalidate cache since single-use tokens can only be used once
+      cachedToken = null;
+      cacheExpiry = 0;
       const token = await getScribeToken();
       await scribe.connect({
         token,
@@ -83,27 +97,19 @@ export function useTranscriber() {
 
   const setLang = useCallback(async (langCode: string) => {
     langRef.current = langCode;
-    // Reconnect with new language if currently connected
     if (scribe.isConnected && onResultRef.current) {
       console.log("[Scribe] Language changed to", langCode, "— reconnecting");
       scribe.disconnect();
+      cachedToken = null;
+      cacheExpiry = 0;
       const token = await getScribeToken();
       await scribe.connect({
         token,
         languageCode: langCode,
-        microphone: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        microphone: { echoCancellation: true, noiseSuppression: true },
       });
     }
   }, [scribe]);
 
-  return {
-    start,
-    stop,
-    setLang,
-    isConnected: scribe.isConnected,
-    status: scribe.status,
-  };
+  return { start, stop, setLang, isConnected: scribe.isConnected, status: scribe.status };
 }

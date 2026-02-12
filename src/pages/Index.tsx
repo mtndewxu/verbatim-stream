@@ -2,12 +2,15 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
-import { useTranscriber } from "@/hooks/use-transcriber";
+import { useElevenLabsTranscriber, prefetchScribeToken } from "@/hooks/use-transcriber";
+import { useDeepgramTranscriber, prefetchDeepgramToken } from "@/hooks/use-transcriber-deepgram";
 import { translateText } from "@/lib/translate";
 import { refineTranslations } from "@/lib/refine";
 import { getLanguage, type Language } from "@/lib/languages";
 import { playTranslation } from "@/lib/tts";
 import { toast } from "@/hooks/use-toast";
+
+type SttEngine = "elevenlabs" | "deepgram";
 
 const Index = () => {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
@@ -19,24 +22,28 @@ const Index = () => {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [sttEngine, setSttEngine] = useState<SttEngine>("elevenlabs");
 
-  // Active message state for continuous merging — single block per session
   const [activeMessage, setActiveMessage] = useState<ActiveMessage | null>(null);
 
-  // Two transcriber instances: one for monitor, one for console
-  const monitorTranscriber = useTranscriber();
-  const consoleTranscriber = useTranscriber();
+  // All four transcriber hooks (React requires unconditional hook calls)
+  const elMonitor = useElevenLabsTranscriber();
+  const elConsole = useElevenLabsTranscriber();
+  const dgMonitor = useDeepgramTranscriber();
+  const dgConsole = useDeepgramTranscriber();
+
+  // Select active transcribers based on engine
+  const monitorTranscriber = sttEngine === "elevenlabs" ? elMonitor : dgMonitor;
+  const consoleTranscriber = sttEngine === "elevenlabs" ? elConsole : dgConsole;
 
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
 
-  // Console streaming translation refs
   const consoleFinalRef = useRef("");
   const consoleTranslatedRef = useRef("");
   const pendingConsoleTranslations = useRef(0);
   const consoleTranslationSeq = useRef(0);
 
-  // Monitor merging refs — one block for entire session
   const activeFinalRef = useRef("");
   const activeTranslatedRef = useRef("");
   const pendingMonitorTranslations = useRef(0);
@@ -45,15 +52,18 @@ const Index = () => {
   const toLangRef = useRef(toLang);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
-  // Rolling refinement refs
   const refinementSeq = useRef(0);
   const pendingRefinement = useRef<Promise<void> | null>(null);
 
-  // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
 
-  // Auto-scroll whenever activeMessage or entries change
+  // Pre-fetch tokens on mount
+  useEffect(() => {
+    prefetchScribeToken();
+    prefetchDeepgramToken();
+  }, []);
+
   useEffect(() => {
     conversationBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries, activeMessage]);
@@ -62,47 +72,38 @@ const Index = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  // Trigger refinement on the last N entries (up to 2)
+  // Resolve lang code based on engine
+  const getLangCode = useCallback((lang: Language): string => {
+    return sttEngine === "elevenlabs" ? lang.code : lang.speechCode;
+  }, [sttEngine]);
+
   const triggerRefinement = useCallback((entriesToRefine: ConversationEntry[], sourceLang: string, targetLang: string) => {
     if (entriesToRefine.length === 0) return;
-
     const seqId = ++refinementSeq.current;
     const targetIds = entriesToRefine.map(e => e.id);
     const sentences = entriesToRefine.map(e => e.translated);
-
     const promise = refineTranslations(sentences, sourceLang, targetLang)
       .then((refined) => {
-        if (seqId !== refinementSeq.current) return; // stale
+        if (seqId !== refinementSeq.current) return;
         setEntries(prev => prev.map(e => {
           const idx = targetIds.indexOf(e.id);
-          if (idx !== -1 && refined[idx]) {
-            return { ...e, translated: refined[idx], refined: true };
-          }
+          if (idx !== -1 && refined[idx]) return { ...e, translated: refined[idx], refined: true };
           return e;
         }));
       })
       .catch(() => {
-        // Refinement is best-effort; mark as refined anyway so color transitions
         if (seqId === refinementSeq.current) {
-          setEntries(prev => prev.map(e =>
-            targetIds.includes(e.id) ? { ...e, refined: true } : e
-          ));
+          setEntries(prev => prev.map(e => targetIds.includes(e.id) ? { ...e, refined: true } : e));
         }
       });
-
     pendingRefinement.current = promise;
   }, []);
 
   const addEntry = useCallback(
     (original: string, translated: string, from: Language, to: Language, speaker = "You") => {
       const entry: ConversationEntry = {
-        id: crypto.randomUUID(),
-        speaker,
-        original,
-        translated,
-        fromFlag: from.flag,
-        toFlag: to.flag,
-        refined: false,
+        id: crypto.randomUUID(), speaker, original, translated,
+        fromFlag: from.flag, toFlag: to.flag, refined: false,
       };
       setEntries((prev) => {
         const next = [...prev, entry];
@@ -116,38 +117,27 @@ const Index = () => {
     [triggerRefinement]
   );
 
-  // Finalize the active block → move to entries (only called when monitor stops)
   const finalizeActiveBlock = useCallback(async () => {
     const text = activeFinalRef.current.trim();
     let translated = activeTranslatedRef.current.trim();
-
     if (text && !translated) {
-      try {
-        translated = await translateText(text, toLangRef.current.name, fromLangRef.current.name);
-      } catch {
-        // proceed with whatever we have
-      }
+      try { translated = await translateText(text, toLangRef.current.name, fromLangRef.current.name); } catch {}
     }
-
-    if (text) {
-      addEntry(text, translated, toLangRef.current, fromLangRef.current, "Speaker");
-    }
+    if (text) addEntry(text, translated, toLangRef.current, fromLangRef.current, "Speaker");
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
     pendingMonitorTranslations.current = 0;
     setActiveMessage(null);
   }, [addEntry]);
 
-  // ── Console: Record with ElevenLabs Scribe + streaming translation ──
+  // ── Console ──
   const handleRecord = useCallback(() => {
     haptic();
     if (isRecording) {
-      // Stop recording
       isRecordingRef.current = false;
       setIsRecording(false);
       consoleTranscriber.stop();
 
-      // After stop, finalize
       const text = consoleFinalRef.current.trim();
       const translated = consoleTranslatedRef.current.trim();
 
@@ -159,25 +149,14 @@ const Index = () => {
             consoleTranslatedRef.current = result;
             addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
           })
-          .catch((e: any) => {
-            toast({ variant: "destructive", title: "Translation error", description: e.message });
-          })
-          .finally(() => {
-            setIsTranslating(false);
-          })
-          .then(async () => {
-            if (pendingRefinement.current) {
-              await pendingRefinement.current;
-            }
-          });
+          .catch((e: any) => toast({ variant: "destructive", title: "Translation error", description: e.message }))
+          .finally(() => setIsTranslating(false))
+          .then(async () => { if (pendingRefinement.current) await pendingRefinement.current; });
       } else if (text) {
         addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
-        if (pendingRefinement.current) {
-          pendingRefinement.current.then(() => {});
-        }
+        if (pendingRefinement.current) pendingRefinement.current.then(() => {});
       }
     } else {
-      // Start recording
       consoleFinalRef.current = "";
       consoleTranslatedRef.current = "";
       pendingConsoleTranslations.current = 0;
@@ -189,14 +168,12 @@ const Index = () => {
       setIsRecording(true);
 
       consoleTranscriber.start(
-        fromLang.code,
+        getLangCode(fromLang),
         (text, isFinal) => {
           if (isFinal) {
             finalTextRef.current += text + " ";
             consoleFinalRef.current = finalTextRef.current.trim();
             setSpeechText(consoleFinalRef.current);
-
-            // Full-context re-translation
             const fullText = consoleFinalRef.current;
             if (fullText) {
               const seqId = ++consoleTranslationSeq.current;
@@ -212,13 +189,10 @@ const Index = () => {
                 .catch(() => {})
                 .finally(() => {
                   pendingConsoleTranslations.current--;
-                  if (pendingConsoleTranslations.current <= 0) {
-                    setIsTranslating(false);
-                  }
+                  if (pendingConsoleTranslations.current <= 0) setIsTranslating(false);
                 });
             }
           } else {
-            // Interim: show partial text immediately
             setSpeechText((finalTextRef.current + text).trim());
           }
         },
@@ -229,16 +203,12 @@ const Index = () => {
         }
       );
     }
-  }, [isRecording, fromLang, toLang, addEntry, consoleTranscriber]);
+  }, [isRecording, fromLang, toLang, addEntry, consoleTranscriber, getLangCode]);
 
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
     haptic();
-    if (isPlaying) {
-      await playTranslation(translationText);
-      setIsPlaying(false);
-      return;
-    }
+    if (isPlaying) { await playTranslation(translationText); setIsPlaying(false); return; }
     setIsPlaying(true);
     try {
       const started = await playTranslation(translationText, () => setIsPlaying(false));
@@ -251,19 +221,15 @@ const Index = () => {
 
   const handleClear = useCallback(() => {
     haptic();
-    setSpeechText("");
-    setTranslationText("");
-    finalTextRef.current = "";
-    consoleFinalRef.current = "";
-    consoleTranslatedRef.current = "";
+    setSpeechText(""); setTranslationText("");
+    finalTextRef.current = ""; consoleFinalRef.current = ""; consoleTranslatedRef.current = "";
   }, []);
 
   const handleSwapLangs = useCallback(() => {
-    setFromLang(toLang);
-    setToLang(fromLang);
-    if (consoleTranscriber.isConnected) consoleTranscriber.setLang(toLang.code);
-    if (monitorTranscriber.isConnected) monitorTranscriber.setLang(fromLang.code);
-  }, [fromLang, toLang, consoleTranscriber, monitorTranscriber]);
+    setFromLang(toLang); setToLang(fromLang);
+    if (consoleTranscriber.isConnected) consoleTranscriber.setLang(getLangCode(toLang));
+    if (monitorTranscriber.isConnected) monitorTranscriber.setLang(getLangCode(fromLang));
+  }, [fromLang, toLang, consoleTranscriber, monitorTranscriber, getLangCode]);
 
   // ── Monitor toggle ──
   const handleMonitorToggle = useCallback(
@@ -271,7 +237,6 @@ const Index = () => {
       haptic();
       setIsMonitoring(checked);
       if (checked) {
-        // Start fresh — single active block for entire session
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
         pendingMonitorTranslations.current = 0;
@@ -279,22 +244,16 @@ const Index = () => {
         setActiveMessage(null);
 
         monitorTranscriber.start(
-          toLang.code,
+          getLangCode(toLang),
           (text, isFinal) => {
             if (isFinal) {
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
-
               setActiveMessage({
-                original: finalSoFar,
-                interimSuffix: "",
-                translated: activeTranslatedRef.current,
-                interimTranslation: "",
-                sourceFlag: toLangRef.current.flag,
-                targetFlag: fromLangRef.current.flag,
+                original: finalSoFar, interimSuffix: "",
+                translated: activeTranslatedRef.current, interimTranslation: "",
+                sourceFlag: toLangRef.current.flag, targetFlag: fromLangRef.current.flag,
               });
-
-              // Full-context re-translation
               const fullText = activeFinalRef.current.trim();
               if (fullText) {
                 const seqId = ++monitorTranslationSeq.current;
@@ -303,27 +262,18 @@ const Index = () => {
                   .then((result) => {
                     if (seqId === monitorTranslationSeq.current) {
                       activeTranslatedRef.current = result;
-                      setActiveMessage((prev) =>
-                        prev ? { ...prev, translated: result, interimTranslation: "" } : null
-                      );
+                      setActiveMessage((prev) => prev ? { ...prev, translated: result, interimTranslation: "" } : null);
                     }
                   })
                   .catch(() => {})
-                  .finally(() => {
-                    pendingMonitorTranslations.current--;
-                  });
+                  .finally(() => { pendingMonitorTranslations.current--; });
               }
             } else {
               const currentFinal = activeFinalRef.current.trim();
-              const interimSuffix = " " + text;
-
               setActiveMessage({
-                original: currentFinal,
-                interimSuffix,
-                translated: activeTranslatedRef.current,
-                interimTranslation: "",
-                sourceFlag: toLangRef.current.flag,
-                targetFlag: fromLangRef.current.flag,
+                original: currentFinal, interimSuffix: " " + text,
+                translated: activeTranslatedRef.current, interimTranslation: "",
+                sourceFlag: toLangRef.current.flag, targetFlag: fromLangRef.current.flag,
               });
             }
           },
@@ -333,38 +283,62 @@ const Index = () => {
           }
         );
       } else {
-        // Stop monitor
         monitorTranscriber.stop();
-
-        // Wait for any pending segment translations to finish
         const waitForTranslations = () =>
           new Promise<void>((resolve) => {
             const check = () => {
-              if (pendingMonitorTranslations.current <= 0) {
-                resolve();
-              } else {
-                setTimeout(check, 100);
-              }
+              if (pendingMonitorTranslations.current <= 0) resolve();
+              else setTimeout(check, 100);
             };
             check();
           });
-
         await waitForTranslations();
         await finalizeActiveBlock();
-
-        if (pendingRefinement.current) {
-          await pendingRefinement.current;
-        }
+        if (pendingRefinement.current) await pendingRefinement.current;
       }
     },
-    [fromLang, toLang, finalizeActiveBlock, monitorTranscriber]
+    [fromLang, toLang, finalizeActiveBlock, monitorTranscriber, getLangCode]
   );
+
+  const handleEngineSwitch = useCallback((engine: SttEngine) => {
+    if (isMonitoring || isRecording) {
+      toast({ title: "Stop first", description: "Please stop recording/monitoring before switching engines." });
+      return;
+    }
+    setSttEngine(engine);
+    toast({ title: `STT: ${engine === "elevenlabs" ? "ElevenLabs" : "Deepgram"}` });
+  }, [isMonitoring, isRecording]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       {/* Top bar */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-card">
-        <h1 className="text-base font-semibold text-foreground tracking-tight">Translator</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-base font-semibold text-foreground tracking-tight">Translator</h1>
+          {/* STT Engine toggle */}
+          <div className="flex items-center bg-muted rounded-full p-0.5 ml-2">
+            <button
+              onClick={() => handleEngineSwitch("elevenlabs")}
+              className={`text-[9px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                sttEngine === "elevenlabs"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              EL
+            </button>
+            <button
+              onClick={() => handleEngineSwitch("deepgram")}
+              className={`text-[9px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                sttEngine === "deepgram"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              DG
+            </button>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Monitor
@@ -382,10 +356,8 @@ const Index = () => {
         </p>
       </div>
 
-      {/* Monitor (top ~60%) */}
       <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
 
-      {/* Console (bottom ~40%) */}
       <ConsoleSection
         speechText={speechText}
         translationText={translationText}
