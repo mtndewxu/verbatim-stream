@@ -31,11 +31,13 @@ const Index = () => {
   const consoleFinalRef = useRef("");
   const consoleTranslatedRef = useRef("");
   const pendingConsoleTranslations = useRef(0);
+  const consoleTranslationSeq = useRef(0);
 
   // Monitor merging refs — one block for entire session
   const activeFinalRef = useRef("");
   const activeTranslatedRef = useRef("");
   const pendingMonitorTranslations = useRef(0);
+  const monitorTranslationSeq = useRef(0);
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
@@ -132,6 +134,7 @@ const Index = () => {
       consoleFinalRef.current = "";
       consoleTranslatedRef.current = "";
       pendingConsoleTranslations.current = 0;
+      consoleTranslationSeq.current = 0;
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
@@ -145,15 +148,19 @@ const Index = () => {
             consoleFinalRef.current = finalTextRef.current.trim();
             setSpeechText(consoleFinalRef.current);
 
-            // Streaming translation: translate each new segment immediately
-            const segment = text.trim();
-            if (segment) {
+            // Full-context re-translation: translate entire accumulated text
+            const fullText = consoleFinalRef.current;
+            if (fullText) {
+              const seqId = ++consoleTranslationSeq.current;
               pendingConsoleTranslations.current++;
               setIsTranslating(true);
-              translateText(segment, fromLangRef.current.name, toLangRef.current.name)
-                .then((segResult) => {
-                  consoleTranslatedRef.current = (consoleTranslatedRef.current + " " + segResult).trim();
-                  setTranslationText(consoleTranslatedRef.current);
+              translateText(fullText, fromLangRef.current.name, toLangRef.current.name)
+                .then((result) => {
+                  // Only apply if this is still the latest request
+                  if (seqId === consoleTranslationSeq.current) {
+                    consoleTranslatedRef.current = result;
+                    setTranslationText(result);
+                  }
                 })
                 .catch(() => {})
                 .finally(() => {
@@ -229,6 +236,7 @@ const Index = () => {
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
         pendingMonitorTranslations.current = 0;
+        monitorTranslationSeq.current = 0;
         setActiveMessage(null);
 
         const monitor = new DeepgramTranscriber(
@@ -249,16 +257,20 @@ const Index = () => {
                 targetFlag: fromLangRef.current.flag,
               });
 
-              // Segmented translation: only translate the NEW segment, then append
-              const segment = text.trim();
-              if (segment) {
+              // Full-context re-translation: translate entire accumulated text
+              const fullText = activeFinalRef.current.trim();
+              if (fullText) {
+                const seqId = ++monitorTranslationSeq.current;
                 pendingMonitorTranslations.current++;
-                translateText(segment, toLangRef.current.name, fromLangRef.current.name)
-                  .then((segmentTranslation) => {
-                    activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
-                    setActiveMessage((prev) =>
-                      prev ? { ...prev, translated: activeTranslatedRef.current, interimTranslation: "" } : null
-                    );
+                translateText(fullText, toLangRef.current.name, fromLangRef.current.name)
+                  .then((result) => {
+                    // Only apply if this is still the latest request
+                    if (seqId === monitorTranslationSeq.current) {
+                      activeTranslatedRef.current = result;
+                      setActiveMessage((prev) =>
+                        prev ? { ...prev, translated: result, interimTranslation: "" } : null
+                      );
+                    }
                   })
                   .catch(() => {})
                   .finally(() => {
