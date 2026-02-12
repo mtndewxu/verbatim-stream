@@ -4,13 +4,14 @@ import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/co
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { useElevenLabsTranscriber, prefetchScribeToken } from "@/hooks/use-transcriber";
 import { useDeepgramTranscriber, prefetchDeepgramToken } from "@/hooks/use-transcriber-deepgram";
+import { useVolcengineTranscriber } from "@/hooks/use-transcriber-volcengine";
 import { translateText } from "@/lib/translate";
 import { refineTranslations } from "@/lib/refine";
 import { getLanguage, type Language } from "@/lib/languages";
 import { playTranslation } from "@/lib/tts";
 import { toast } from "@/hooks/use-toast";
 
-type SttEngine = "elevenlabs" | "deepgram";
+type SttEngine = "elevenlabs" | "deepgram" | "volcengine";
 
 const Index = () => {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
@@ -26,15 +27,17 @@ const Index = () => {
 
   const [activeMessage, setActiveMessage] = useState<ActiveMessage | null>(null);
 
-  // All four transcriber hooks (React requires unconditional hook calls)
+  // All transcriber hooks (React requires unconditional hook calls)
   const elMonitor = useElevenLabsTranscriber();
   const elConsole = useElevenLabsTranscriber();
   const dgMonitor = useDeepgramTranscriber();
   const dgConsole = useDeepgramTranscriber();
+  const vcMonitor = useVolcengineTranscriber();
+  const vcConsole = useVolcengineTranscriber();
 
   // Select active transcribers based on engine
-  const monitorTranscriber = sttEngine === "elevenlabs" ? elMonitor : dgMonitor;
-  const consoleTranscriber = sttEngine === "elevenlabs" ? elConsole : dgConsole;
+  const monitorTranscriber = sttEngine === "elevenlabs" ? elMonitor : sttEngine === "deepgram" ? dgMonitor : vcMonitor;
+  const consoleTranscriber = sttEngine === "elevenlabs" ? elConsole : sttEngine === "deepgram" ? dgConsole : vcConsole;
 
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
@@ -74,7 +77,9 @@ const Index = () => {
 
   // Resolve lang code based on engine
   const getLangCode = useCallback((lang: Language): string => {
-    return sttEngine === "elevenlabs" ? lang.code : lang.speechCode;
+    if (sttEngine === "elevenlabs") return lang.code;
+    if (sttEngine === "volcengine") return lang.code; // Volcengine uses "zh", "en" etc.
+    return lang.speechCode; // Deepgram uses BCP 47
   }, [sttEngine]);
 
   const triggerRefinement = useCallback((entriesToRefine: ConversationEntry[], sourceLang: string, targetLang: string) => {
@@ -167,6 +172,20 @@ const Index = () => {
       isRecordingRef.current = true;
       setIsRecording(true);
 
+      // If Volcengine, set target lang and translation callback
+      if (sttEngine === "volcengine") {
+        vcConsole.setTargetLang(toLang.code);
+        vcConsole.setOnTranslation((translation, isFinal) => {
+          if (isFinal) {
+            consoleTranslatedRef.current = translation;
+            setTranslationText(translation);
+            setIsTranslating(false);
+          } else {
+            setTranslationText(translation);
+          }
+        });
+      }
+
       consoleTranscriber.start(
         getLangCode(fromLang),
         (text, isFinal) => {
@@ -174,23 +193,26 @@ const Index = () => {
             finalTextRef.current += text + " ";
             consoleFinalRef.current = finalTextRef.current.trim();
             setSpeechText(consoleFinalRef.current);
-            const fullText = consoleFinalRef.current;
-            if (fullText) {
-              const seqId = ++consoleTranslationSeq.current;
-              pendingConsoleTranslations.current++;
-              setIsTranslating(true);
-              translateText(fullText, fromLangRef.current.name, toLangRef.current.name)
-                .then((result) => {
-                  if (seqId === consoleTranslationSeq.current) {
-                    consoleTranslatedRef.current = result;
-                    setTranslationText(result);
-                  }
-                })
-                .catch(() => {})
-                .finally(() => {
-                  pendingConsoleTranslations.current--;
-                  if (pendingConsoleTranslations.current <= 0) setIsTranslating(false);
-                });
+            // Skip separate translation for Volcengine (it provides its own)
+            if (sttEngine !== "volcengine") {
+              const fullText = consoleFinalRef.current;
+              if (fullText) {
+                const seqId = ++consoleTranslationSeq.current;
+                pendingConsoleTranslations.current++;
+                setIsTranslating(true);
+                translateText(fullText, fromLangRef.current.name, toLangRef.current.name)
+                  .then((result) => {
+                    if (seqId === consoleTranslationSeq.current) {
+                      consoleTranslatedRef.current = result;
+                      setTranslationText(result);
+                    }
+                  })
+                  .catch(() => {})
+                  .finally(() => {
+                    pendingConsoleTranslations.current--;
+                    if (pendingConsoleTranslations.current <= 0) setIsTranslating(false);
+                  });
+              }
             }
           } else {
             setSpeechText((finalTextRef.current + text).trim());
@@ -243,6 +265,15 @@ const Index = () => {
         monitorTranslationSeq.current = 0;
         setActiveMessage(null);
 
+        // If Volcengine, set target lang and translation callback
+        if (sttEngine === "volcengine") {
+          vcMonitor.setTargetLang(fromLang.code);
+          vcMonitor.setOnTranslation((translation, _isFinal) => {
+            activeTranslatedRef.current = translation;
+            setActiveMessage((prev) => prev ? { ...prev, translated: translation, interimTranslation: "" } : null);
+          });
+        }
+
         monitorTranscriber.start(
           getLangCode(toLang),
           (text, isFinal) => {
@@ -254,19 +285,22 @@ const Index = () => {
                 translated: activeTranslatedRef.current, interimTranslation: "",
                 sourceFlag: toLangRef.current.flag, targetFlag: fromLangRef.current.flag,
               });
-              const fullText = activeFinalRef.current.trim();
-              if (fullText) {
-                const seqId = ++monitorTranslationSeq.current;
-                pendingMonitorTranslations.current++;
-                translateText(fullText, toLangRef.current.name, fromLangRef.current.name)
-                  .then((result) => {
-                    if (seqId === monitorTranslationSeq.current) {
-                      activeTranslatedRef.current = result;
-                      setActiveMessage((prev) => prev ? { ...prev, translated: result, interimTranslation: "" } : null);
-                    }
-                  })
-                  .catch(() => {})
-                  .finally(() => { pendingMonitorTranslations.current--; });
+              // Skip separate translation for Volcengine
+              if (sttEngine !== "volcengine") {
+                const fullText = activeFinalRef.current.trim();
+                if (fullText) {
+                  const seqId = ++monitorTranslationSeq.current;
+                  pendingMonitorTranslations.current++;
+                  translateText(fullText, toLangRef.current.name, fromLangRef.current.name)
+                    .then((result) => {
+                      if (seqId === monitorTranslationSeq.current) {
+                        activeTranslatedRef.current = result;
+                        setActiveMessage((prev) => prev ? { ...prev, translated: result, interimTranslation: "" } : null);
+                      }
+                    })
+                    .catch(() => {})
+                    .finally(() => { pendingMonitorTranslations.current--; });
+                }
               }
             } else {
               const currentFinal = activeFinalRef.current.trim();
@@ -306,7 +340,8 @@ const Index = () => {
       return;
     }
     setSttEngine(engine);
-    toast({ title: `STT: ${engine === "elevenlabs" ? "ElevenLabs" : "Deepgram"}` });
+    const names: Record<SttEngine, string> = { elevenlabs: "ElevenLabs", deepgram: "Deepgram", volcengine: "Volcengine 同传" };
+    toast({ title: `STT: ${names[engine]}` });
   }, [isMonitoring, isRecording]);
 
   return (
@@ -336,6 +371,16 @@ const Index = () => {
               }`}
             >
               DG
+            </button>
+            <button
+              onClick={() => handleEngineSwitch("volcengine")}
+              className={`text-[9px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                sttEngine === "volcengine"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              VC
             </button>
           </div>
         </div>
