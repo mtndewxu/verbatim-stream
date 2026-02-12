@@ -5,11 +5,13 @@ import type { Language } from "@/lib/languages";
 interface ConsoleSectionProps {
   speechText: string;
   translationText: string;
+  translationSegments?: string[];
   isRecording: boolean;
   isPlaying: boolean;
   isTranslating: boolean;
   fromLang: Language;
   toLang: Language;
+  isVcMode?: boolean;
   onSpeechChange: (text: string) => void;
   onRecord: () => void;
   onPlay: () => void;
@@ -22,11 +24,13 @@ interface ConsoleSectionProps {
 export function ConsoleSection({
   speechText,
   translationText,
+  translationSegments = [],
   isRecording,
   isPlaying,
   isTranslating,
   fromLang,
   toLang,
+  isVcMode = false,
   onSpeechChange,
   onRecord,
   onPlay,
@@ -35,6 +39,12 @@ export function ConsoleSection({
   onToChange,
   onSwapLangs,
 }: ConsoleSectionProps) {
+  // For VC mode with segments, show segmented view
+  const showSegments = isVcMode && translationSegments.length > 0;
+  const displayTranslation = showSegments
+    ? translationSegments.join("\n")
+    : translationText;
+
   return (
     <div className="flex flex-col gap-3 px-5 pt-4 pb-6 bg-background">
       {/* My Speech */}
@@ -52,25 +62,46 @@ export function ConsoleSection({
 
       {/* Translation */}
       <div>
-        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
+        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
           Translation {isTranslating && <span className="text-primary">• translating...</span>}
         </label>
-        <textarea
-          value={translationText}
-          readOnly
-          placeholder="Translation will appear here"
-          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
-        />
+        <div className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] max-h-24 overflow-y-auto">
+          {showSegments ? (
+            <div className="flex flex-col gap-1">
+              {translationSegments.map((seg, i) => (
+                <p
+                  key={i}
+                  className="transition-opacity duration-300"
+                  style={{ opacity: i === translationSegments.length - 1 ? 1 : 0.5 }}
+                >
+                  {seg}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className={displayTranslation ? "" : "text-muted-foreground"}>
+              {displayTranslation || "Translation will appear here"}
+            </p>
+          )}
+        </div>
       </div>
 
-      {/* Language Picker */}
-      <LanguagePicker
-        from={fromLang}
-        to={toLang}
-        onFromChange={onFromChange}
-        onToChange={onToChange}
-        onSwap={onSwapLangs}
-      />
+      {/* Language Picker — hidden in VC mode, replaced with auto badge */}
+      {isVcMode ? (
+        <div className="flex items-center justify-center py-1">
+          <span className="text-[11px] font-medium text-muted-foreground bg-muted px-3 py-1 rounded-full">
+            🇨🇳 中 ↔ EN 🇬🇧 · 自动识别
+          </span>
+        </div>
+      ) : (
+        <LanguagePicker
+          from={fromLang}
+          to={toLang}
+          onFromChange={onFromChange}
+          onToChange={onToChange}
+          onSwap={onSwapLangs}
+        />
+      )}
 
       {/* Action Buttons */}
       <div className="flex items-center justify-center gap-8">
@@ -104,7 +135,7 @@ export function ConsoleSection({
         {/* Play */}
         <button
           onClick={onPlay}
-          disabled={!translationText || isPlaying}
+          disabled={!displayTranslation || isPlaying}
           className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Play translation"
         >

@@ -18,6 +18,7 @@ const Index = () => {
   const [toLang, setToLang] = useState<Language>(getLanguage("en"));
   const [speechText, setSpeechText] = useState("");
   const [translationText, setTranslationText] = useState("");
+  const [translationSegments, setTranslationSegments] = useState<string[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -169,16 +170,20 @@ const Index = () => {
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
+      setTranslationSegments([]);
       isRecordingRef.current = true;
       setIsRecording(true);
 
-      // If Volcengine, set target lang and translation callback
+      // If Volcengine, set translation callback (auto zh↔en)
       if (sttEngine === "volcengine") {
-        vcConsole.setTargetLang(toLang.code);
         vcConsole.setOnTranslation((translation, isFinal) => {
           if (isFinal) {
             consoleTranslatedRef.current = translation;
             setTranslationText(translation);
+            setTranslationSegments(prev => {
+              const next = [...prev, translation];
+              return next.slice(-3); // Keep last 3 segments
+            });
             setIsTranslating(false);
           } else {
             setTranslationText(translation);
@@ -406,11 +411,13 @@ const Index = () => {
       <ConsoleSection
         speechText={speechText}
         translationText={translationText}
+        translationSegments={translationSegments}
         isRecording={isRecording}
         isPlaying={isPlaying}
         isTranslating={isTranslating}
         fromLang={fromLang}
         toLang={toLang}
+        isVcMode={sttEngine === "volcengine"}
         onSpeechChange={setSpeechText}
         onRecord={handleRecord}
         onPlay={handlePlay}
