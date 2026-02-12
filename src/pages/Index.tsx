@@ -259,6 +259,15 @@ const Index = () => {
         </div>
       </header>
 
+      {/* Guide */}
+      <div className="px-5 py-2 border-b border-border bg-muted/30">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <span className="font-semibold text-foreground">📖 Guide</span>{" · "}
+          <span className="font-medium">Incoming:</span> Enable Monitor to translate the other party. Turn off after the session.{" "}
+          <span className="font-medium">Outgoing:</span> Tap Speaker for your turn; use the Loudspeaker icon for playback.
+        </p>
+      </div>
+
       {/* Monitor (top ~60%) */}
       <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
 
