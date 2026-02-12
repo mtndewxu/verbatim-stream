@@ -4,8 +4,8 @@ import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/co
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { DeepgramTranscriber } from "@/lib/deepgram";
 import { translateText } from "@/lib/translate";
-import { playTranslation } from "@/lib/tts";
 import { getLanguage, type Language } from "@/lib/languages";
+import { playTranslation } from "@/lib/tts";
 import { toast } from "@/hooks/use-toast";
 
 const Index = () => {
@@ -118,16 +118,12 @@ const Index = () => {
                 setTranslationText(result);
                 consoleTranslatedRef.current = result;
                 addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
-                // Auto-play the final translation
-                if (result) playTranslation(result).catch(() => {});
               })
               .catch((e) => toast({ variant: "destructive", title: "Translation error", description: e.message }))
               .finally(() => setIsTranslating(false));
           } else if (text) {
             // Translation already streamed in — archive it
             addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
-            // Auto-play
-            if (translated) playTranslation(translated).catch(() => {});
           }
         });
       }
