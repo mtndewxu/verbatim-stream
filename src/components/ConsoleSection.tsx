@@ -55,11 +55,12 @@ export function ConsoleSection({
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
           Translation {isTranslating && <span className="text-primary">• translating...</span>}
         </label>
-        <div className="w-full bg-secondary/50 rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] whitespace-pre-wrap">
-          {translationText || (
-            <span className="text-muted-foreground">Translation will appear here</span>
-          )}
-        </div>
+        <textarea
+          value={translationText}
+          readOnly
+          placeholder="Translation will appear here"
+          className="w-full bg-secondary/50 rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
+        />
       </div>
 
       {/* Language Picker */}
