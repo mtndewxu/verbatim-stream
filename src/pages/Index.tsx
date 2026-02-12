@@ -32,11 +32,9 @@ const Index = () => {
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
 
-  // Monitor merging refs — one block for entire session, no pause timer
+  // Monitor merging refs — one block for entire session
   const activeFinalRef = useRef("");
   const activeTranslatedRef = useRef("");
-  const interimTranslateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastInterimTranslated = useRef("");
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
@@ -102,11 +100,6 @@ const Index = () => {
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
     setActiveMessage(null);
-    lastInterimTranslated.current = "";
-    if (interimTranslateTimer.current) {
-      clearTimeout(interimTranslateTimer.current);
-      interimTranslateTimer.current = null;
-    }
   }, [addEntry]);
 
   const handleRecord = useCallback(() => {
@@ -197,21 +190,14 @@ const Index = () => {
         setActiveMessage(null);
 
         const monitor = new DeepgramTranscriber(
-          fromLang.speechCode,
+          toLang.speechCode,
           (text, isFinal) => {
             if (isFinal) {
               // Append finalized segment to the single active block
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
-              // Clear interim display
-              lastInterimTranslated.current = "";
-              if (interimTranslateTimer.current) {
-                clearTimeout(interimTranslateTimer.current);
-                interimTranslateTimer.current = null;
-              }
-
-              // Update active message: solid original, no interim suffix
+              // Update active message immediately with original text
               setActiveMessage({
                 original: finalSoFar,
                 interimSuffix: "",
@@ -220,7 +206,7 @@ const Index = () => {
               });
 
               // Segmented translation: only translate the NEW segment, then append
-              translateText(text.trim(), fromLangRef.current.name, toLangRef.current.name)
+              translateText(text.trim(), toLangRef.current.name, fromLangRef.current.name)
                 .then((segmentTranslation) => {
                   activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
                   setActiveMessage((prev) =>
@@ -255,10 +241,6 @@ const Index = () => {
         finalizeActiveBlock();
         monitorRef.current?.stop();
         monitorRef.current = null;
-        if (interimTranslateTimer.current) {
-          clearTimeout(interimTranslateTimer.current);
-          interimTranslateTimer.current = null;
-        }
       }
     },
     [fromLang, toLang, finalizeActiveBlock]
