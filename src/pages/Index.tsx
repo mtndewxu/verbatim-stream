@@ -221,7 +221,7 @@ const Index = () => {
                 interimTranslation: "",
               });
 
-              // Parallel translation: translate immediately on isFinal, don't wait
+              // Parallel translation: translate immediately on isFinal
               translateText(finalSoFar, fromLangRef.current.name, toLangRef.current.name)
                 .then((t) => {
                   activeTranslatedRef.current = t;
@@ -231,16 +231,17 @@ const Index = () => {
                 })
                 .catch(() => {});
             } else {
-              // Interim: show as dimmed suffix for immediate visual feedback
+              // Interim: immediately initialize activeMessage if this is the first word
+              const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
               const fullPreview = (activeFinalRef.current + text).trim();
 
-              setActiveMessage((prev) => ({
-                original: prev?.original || activeFinalRef.current.trim(),
+              setActiveMessage({
+                original: currentFinal,
                 interimSuffix,
-                translated: prev?.translated || activeTranslatedRef.current,
-                interimTranslation: prev?.interimTranslation || "",
-              }));
+                translated: activeTranslatedRef.current,
+                interimTranslation: "",
+              });
 
               // Zero-latency: translate interim with short debounce
               if (interimTranslateTimer.current) clearTimeout(interimTranslateTimer.current);
