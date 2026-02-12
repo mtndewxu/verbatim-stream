@@ -69,8 +69,8 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
         )}
       </div>
 
-      {/* Messages — flex column with constrained overflow */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* Messages — column-reverse pins latest content to bottom */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse">
         <div className="flex flex-col px-5 py-3 gap-3 [&>div]:bg-card/50 [&>div]:backdrop-blur-md">
           {entries.length === 0 && !activeMessage && (
             <div className="flex items-center justify-center h-32">

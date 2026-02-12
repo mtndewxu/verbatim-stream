@@ -1,80 +1,34 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 
 export type AppThemeState = "default" | "monitoring" | "recording";
 
-interface MorandiPalette {
+export interface MorandiPalette {
   label: string;
-  default: string;
-  monitoring: string;
-  recording: string;
+  color: string;
 }
 
-export const MORANDI_PALETTES: MorandiPalette[] = [
-  {
-    label: "Linen",
-    default: "#F7F3F0",
-    monitoring: "#F0F4F8",
-    recording: "#F1F3F0",
-  },
-  {
-    label: "Blush",
-    default: "#F5EFEE",
-    monitoring: "#EEF2F7",
-    recording: "#EFF2EE",
-  },
-  {
-    label: "Dove",
-    default: "#EFEEED",
-    monitoring: "#E8EDF3",
-    recording: "#ECF0EB",
-  },
-  {
-    label: "Sand",
-    default: "#F4F1EB",
-    monitoring: "#EBF0F5",
-    recording: "#EEF1EA",
-  },
+export const MORANDI_PRESETS: MorandiPalette[] = [
+  { label: "Glacier Blue", color: "#F0F4F8" },
+  { label: "Soft Sage", color: "#F1F3F0" },
+  { label: "Muted Linen", color: "#F7F3F0" },
+  { label: "Mist Gray", color: "#F1F3F5" },
 ];
 
 export function useDynamicTheme() {
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  const [lockedColor, setLockedColor] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(2); // default: Muted Linen
 
-  const palette = MORANDI_PALETTES[paletteIndex];
+  const background = MORANDI_PRESETS[selectedIndex].color;
+  const currentPreset = MORANDI_PRESETS[selectedIndex];
 
-  const getBackground = useCallback(
-    (state: AppThemeState): string => {
-      if (lockedColor) return lockedColor;
-      return palette[state];
-    },
-    [palette, lockedColor]
-  );
-
-  const cyclePalette = useCallback(() => {
-    if (lockedColor) {
-      // Unlock
-      setLockedColor(null);
-    } else {
-      setPaletteIndex((i) => (i + 1) % MORANDI_PALETTES.length);
-    }
-  }, [lockedColor]);
-
-  const lockColor = useCallback((color: string) => {
-    setLockedColor(color);
-  }, []);
-
-  const unlock = useCallback(() => {
-    setLockedColor(null);
+  const selectPreset = useCallback((index: number) => {
+    setSelectedIndex(index);
   }, []);
 
   return {
-    palette,
-    paletteIndex,
-    lockedColor,
-    getBackground,
-    cyclePalette,
-    lockColor,
-    unlock,
-    isLocked: !!lockedColor,
+    background,
+    currentPreset,
+    selectedIndex,
+    selectPreset,
+    presets: MORANDI_PRESETS,
   };
 }
