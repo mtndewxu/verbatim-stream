@@ -4,8 +4,16 @@ const TOKEN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepgram-to
 
 type TranscriptCallback = (text: string, isFinal: boolean) => void;
 
+// Token cache — avoids re-fetching during the 50s window
+let cachedKey: string | null = null;
+let cacheExpiry = 0;
+const CACHE_TTL_MS = 50_000; // 50s (edge fn returns keys valid ~60s)
+
 async function getDeepgramKey(): Promise<string> {
-  // Always fetch a fresh temporary key (TTL 60s from edge function)
+  if (cachedKey && Date.now() < cacheExpiry) {
+    console.log("[Deepgram] Using cached API key");
+    return cachedKey;
+  }
   console.log("[Deepgram] Fetching temporary API key from edge function…");
   const resp = await fetch(TOKEN_URL, {
     headers: {
@@ -15,8 +23,15 @@ async function getDeepgramKey(): Promise<string> {
   });
   if (!resp.ok) throw new Error("Failed to get Deepgram token");
   const data = await resp.json();
+  cachedKey = data.key;
+  cacheExpiry = Date.now() + CACHE_TTL_MS;
   console.log("[Deepgram] Temporary API key obtained ✓");
   return data.key;
+}
+
+/** Pre-warm the token cache so start() doesn't wait for the fetch. */
+export function prefetchDeepgramToken(): void {
+  getDeepgramKey().catch(() => {});
 }
 
 export class DeepgramTranscriber {
@@ -64,10 +79,13 @@ export class DeepgramTranscriber {
         console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
       }
 
-      // Start audio pipeline FIRST so audio is buffered during WS handshake
+      // Parallelize: setup audio pipeline AND fetch token simultaneously
+      // Audio is buffered during WS handshake via preConnectBuffer
+      const keyPromise = getDeepgramKey();
       await this.setupAudioWorklet();
-      // WS connects in parallel; buffered audio flushed on open
-      await this.connectWebSocket();
+      const key = await keyPromise;
+      // Now open WS with the already-fetched key
+      await this.connectWebSocketWithKey(key);
     } catch (e: any) {
       console.error("[Deepgram] Start error:", e);
       this.running = false;
@@ -102,6 +120,10 @@ export class DeepgramTranscriber {
 
   private async connectWebSocket() {
     const key = await getDeepgramKey();
+    return this.connectWebSocketWithKey(key);
+  }
+
+  private connectWebSocketWithKey(key: string) {
     const dgLang = this.mapLang(this.lang);
 
     // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)

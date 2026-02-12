@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
-import { DeepgramTranscriber } from "@/lib/deepgram";
+import { DeepgramTranscriber, prefetchDeepgramToken } from "@/lib/deepgram";
 import { translateText } from "@/lib/translate";
 import { refineTranslations } from "@/lib/refine";
 import { getLanguage, type Language } from "@/lib/languages";
@@ -50,6 +50,11 @@ const Index = () => {
   // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
+
+  // Pre-fetch Deepgram token on mount so it's cached when user clicks
+  useEffect(() => {
+    prefetchDeepgramToken();
+  }, []);
 
   // Auto-scroll whenever activeMessage or entries change
   useEffect(() => {
