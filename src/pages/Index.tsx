@@ -4,6 +4,7 @@ import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/co
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { DeepgramTranscriber } from "@/lib/deepgram";
 import { translateText } from "@/lib/translate";
+import { refineTranslations } from "@/lib/refine";
 import { getLanguage, type Language } from "@/lib/languages";
 import { playTranslation } from "@/lib/tts";
 import { toast } from "@/hooks/use-toast";
@@ -42,6 +43,10 @@ const Index = () => {
   const toLangRef = useRef(toLang);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
+  // Rolling refinement refs
+  const refinementSeq = useRef(0);
+  const pendingRefinement = useRef<Promise<void> | null>(null);
+
   // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
@@ -55,6 +60,37 @@ const Index = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
+  // Trigger refinement on the last N entries (up to 2)
+  const triggerRefinement = useCallback((entriesToRefine: ConversationEntry[], sourceLang: string, targetLang: string) => {
+    if (entriesToRefine.length === 0) return;
+
+    const seqId = ++refinementSeq.current;
+    const targetIds = entriesToRefine.map(e => e.id);
+    const sentences = entriesToRefine.map(e => e.translated);
+
+    const promise = refineTranslations(sentences, sourceLang, targetLang)
+      .then((refined) => {
+        if (seqId !== refinementSeq.current) return; // stale
+        setEntries(prev => prev.map(e => {
+          const idx = targetIds.indexOf(e.id);
+          if (idx !== -1 && refined[idx]) {
+            return { ...e, translated: refined[idx], refined: true };
+          }
+          return e;
+        }));
+      })
+      .catch(() => {
+        // Refinement is best-effort; mark as refined anyway so color transitions
+        if (seqId === refinementSeq.current) {
+          setEntries(prev => prev.map(e =>
+            targetIds.includes(e.id) ? { ...e, refined: true } : e
+          ));
+        }
+      });
+
+    pendingRefinement.current = promise;
+  }, []);
+
   const addEntry = useCallback(
     (original: string, translated: string, from: Language, to: Language, speaker = "You") => {
       const entry: ConversationEntry = {
@@ -64,10 +100,21 @@ const Index = () => {
         translated,
         fromFlag: from.flag,
         toFlag: to.flag,
+        refined: false,
       };
-      setEntries((prev) => [...prev, entry]);
+      setEntries((prev) => {
+        const next = [...prev, entry];
+        // Trigger refinement on the last 2 entries
+        const last2 = next.slice(-2);
+        // Determine source/target for refinement based on speaker
+        const srcLang = speaker === "Speaker" ? to.name : from.name;
+        const tgtLang = speaker === "Speaker" ? from.name : to.name;
+        // Schedule refinement async (after state update)
+        setTimeout(() => triggerRefinement(last2, srcLang, tgtLang), 0);
+        return next;
+      });
     },
-    []
+    [triggerRefinement]
   );
 
   // Finalize the active block → move to entries (only called when monitor stops)
@@ -107,7 +154,7 @@ const Index = () => {
       recorderRef.current = null;
 
       if (rec) {
-        rec.stopGracefully(3000).then(() => {
+        rec.stopGracefully(3000).then(async () => {
           // After all finals received, check if we still need a final translation
           const text = consoleFinalRef.current.trim();
           const translated = consoleTranslatedRef.current.trim();
@@ -115,17 +162,24 @@ const Index = () => {
           if (text && !translated) {
             // No translation came in yet, do a full translate
             setIsTranslating(true);
-            translateText(text, fromLangRef.current.name, toLangRef.current.name)
-              .then((result) => {
-                setTranslationText(result);
-                consoleTranslatedRef.current = result;
-                addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
-              })
-              .catch((e) => toast({ variant: "destructive", title: "Translation error", description: e.message }))
-              .finally(() => setIsTranslating(false));
+            try {
+              const result = await translateText(text, fromLangRef.current.name, toLangRef.current.name);
+              setTranslationText(result);
+              consoleTranslatedRef.current = result;
+              addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
+            } catch (e: any) {
+              toast({ variant: "destructive", title: "Translation error", description: e.message });
+            } finally {
+              setIsTranslating(false);
+            }
           } else if (text) {
             // Translation already streamed in — archive it
             addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
+          }
+
+          // Wait for refinement to finish
+          if (pendingRefinement.current) {
+            await pendingRefinement.current;
           }
         });
       }
@@ -325,6 +379,11 @@ const Index = () => {
 
         await waitForTranslations();
         await finalizeActiveBlock();
+
+        // Wait for the final refinement pass to complete
+        if (pendingRefinement.current) {
+          await pendingRefinement.current;
+        }
       }
     },
     [fromLang, toLang, finalizeActiveBlock]

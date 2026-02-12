@@ -2,3 +2,6 @@ project_id = "dxrizlomspjscejhrvek"
 
 [functions.deepgram-token]
 verify_jwt = false
+
+[functions.refine-translation]
+verify_jwt = false

@@ -9,6 +9,7 @@ export interface ConversationEntry {
   translated: string;
   fromFlag: string;
   toFlag: string;
+  refined?: boolean;
 }
 
 export interface ActiveMessage {
@@ -123,7 +124,7 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
               <p className="text-sm text-foreground leading-relaxed">
                 {entry.fromFlag} {entry.original}
               </p>
-              <p className="text-sm font-semibold text-primary leading-relaxed mt-1">
+              <p className={`text-sm font-semibold leading-relaxed mt-1 transition-colors duration-700 ${entry.refined ? "text-primary" : "text-muted-foreground"}`}>
                 → {entry.toFlag} {entry.translated}
               </p>
             </div>
