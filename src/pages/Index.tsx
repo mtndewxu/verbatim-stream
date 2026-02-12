@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
-import { DeepgramTranscriber, prefetchDeepgramToken } from "@/lib/deepgram";
+import { useTranscriber } from "@/hooks/use-transcriber";
 import { translateText } from "@/lib/translate";
 import { refineTranslations } from "@/lib/refine";
 import { getLanguage, type Language } from "@/lib/languages";
@@ -23,8 +23,10 @@ const Index = () => {
   // Active message state for continuous merging — single block per session
   const [activeMessage, setActiveMessage] = useState<ActiveMessage | null>(null);
 
-  const monitorRef = useRef<DeepgramTranscriber | null>(null);
-  const recorderRef = useRef<DeepgramTranscriber | null>(null);
+  // Two transcriber instances: one for monitor, one for console
+  const monitorTranscriber = useTranscriber();
+  const consoleTranscriber = useTranscriber();
+
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
 
@@ -50,11 +52,6 @@ const Index = () => {
   // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
-
-  // Pre-fetch Deepgram token on mount so it's cached when user clicks
-  useEffect(() => {
-    prefetchDeepgramToken();
-  }, []);
 
   // Auto-scroll whenever activeMessage or entries change
   useEffect(() => {
@@ -109,12 +106,9 @@ const Index = () => {
       };
       setEntries((prev) => {
         const next = [...prev, entry];
-        // Trigger refinement on the last 2 entries
         const last2 = next.slice(-2);
-        // Determine source/target for refinement based on speaker
         const srcLang = speaker === "Speaker" ? to.name : from.name;
         const tgtLang = speaker === "Speaker" ? from.name : to.name;
-        // Schedule refinement async (after state update)
         setTimeout(() => triggerRefinement(last2, srcLang, tgtLang), 0);
         return next;
       });
@@ -127,7 +121,6 @@ const Index = () => {
     const text = activeFinalRef.current.trim();
     let translated = activeTranslatedRef.current.trim();
 
-    // If there's untranslated text remaining, translate it before finalizing
     if (text && !translated) {
       try {
         translated = await translateText(text, toLangRef.current.name, fromLangRef.current.name);
@@ -137,7 +130,6 @@ const Index = () => {
     }
 
     if (text) {
-      // Monitor: source is toLang, target is fromLang
       addEntry(text, translated, toLangRef.current, fromLangRef.current, "Speaker");
     }
     activeFinalRef.current = "";
@@ -146,47 +138,43 @@ const Index = () => {
     setActiveMessage(null);
   }, [addEntry]);
 
-  // ── Console: Record with Deepgram + streaming translation ──
+  // ── Console: Record with ElevenLabs Scribe + streaming translation ──
   const handleRecord = useCallback(() => {
     haptic();
     if (isRecording) {
       // Stop recording
       isRecordingRef.current = false;
       setIsRecording(false);
+      consoleTranscriber.stop();
 
-      // Graceful stop to capture remaining finals
-      const rec = recorderRef.current;
-      recorderRef.current = null;
+      // After stop, finalize
+      const text = consoleFinalRef.current.trim();
+      const translated = consoleTranslatedRef.current.trim();
 
-      if (rec) {
-        rec.stopGracefully(3000).then(async () => {
-          // After all finals received, check if we still need a final translation
-          const text = consoleFinalRef.current.trim();
-          const translated = consoleTranslatedRef.current.trim();
-
-          if (text && !translated) {
-            // No translation came in yet, do a full translate
-            setIsTranslating(true);
-            try {
-              const result = await translateText(text, fromLangRef.current.name, toLangRef.current.name);
-              setTranslationText(result);
-              consoleTranslatedRef.current = result;
-              addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
-            } catch (e: any) {
-              toast({ variant: "destructive", title: "Translation error", description: e.message });
-            } finally {
-              setIsTranslating(false);
+      if (text && !translated) {
+        setIsTranslating(true);
+        translateText(text, fromLangRef.current.name, toLangRef.current.name)
+          .then((result) => {
+            setTranslationText(result);
+            consoleTranslatedRef.current = result;
+            addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
+          })
+          .catch((e: any) => {
+            toast({ variant: "destructive", title: "Translation error", description: e.message });
+          })
+          .finally(() => {
+            setIsTranslating(false);
+          })
+          .then(async () => {
+            if (pendingRefinement.current) {
+              await pendingRefinement.current;
             }
-          } else if (text) {
-            // Translation already streamed in — archive it
-            addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
-          }
-
-          // Wait for refinement to finish
-          if (pendingRefinement.current) {
-            await pendingRefinement.current;
-          }
-        });
+          });
+      } else if (text) {
+        addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
+        if (pendingRefinement.current) {
+          pendingRefinement.current.then(() => {});
+        }
       }
     } else {
       // Start recording
@@ -198,16 +186,17 @@ const Index = () => {
       setSpeechText("");
       setTranslationText("");
       isRecordingRef.current = true;
+      setIsRecording(true);
 
-      const rec = new DeepgramTranscriber(
-        fromLang.speechCode,
+      consoleTranscriber.start(
+        fromLang.code,
         (text, isFinal) => {
           if (isFinal) {
             finalTextRef.current += text + " ";
             consoleFinalRef.current = finalTextRef.current.trim();
             setSpeechText(consoleFinalRef.current);
 
-            // Full-context re-translation: translate entire accumulated text
+            // Full-context re-translation
             const fullText = consoleFinalRef.current;
             if (fullText) {
               const seqId = ++consoleTranslationSeq.current;
@@ -215,7 +204,6 @@ const Index = () => {
               setIsTranslating(true);
               translateText(fullText, fromLangRef.current.name, toLangRef.current.name)
                 .then((result) => {
-                  // Only apply if this is still the latest request
                   if (seqId === consoleTranslationSeq.current) {
                     consoleTranslatedRef.current = result;
                     setTranslationText(result);
@@ -234,22 +222,14 @@ const Index = () => {
             setSpeechText((finalTextRef.current + text).trim());
           }
         },
-        () => {
-          isRecordingRef.current = false;
-          setIsRecording(false);
-        },
         (error) => {
           toast({ variant: "destructive", title: "Mic error", description: error });
           isRecordingRef.current = false;
           setIsRecording(false);
         }
       );
-
-      recorderRef.current = rec;
-      rec.start();
-      setIsRecording(true);
     }
-  }, [isRecording, fromLang, toLang, addEntry]);
+  }, [isRecording, fromLang, toLang, addEntry, consoleTranscriber]);
 
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
@@ -281,9 +261,9 @@ const Index = () => {
   const handleSwapLangs = useCallback(() => {
     setFromLang(toLang);
     setToLang(fromLang);
-    if (recorderRef.current) recorderRef.current.setLang(toLang.speechCode);
-    if (monitorRef.current) monitorRef.current.setLang(fromLang.speechCode);
-  }, [fromLang, toLang]);
+    if (consoleTranscriber.isConnected) consoleTranscriber.setLang(toLang.code);
+    if (monitorTranscriber.isConnected) monitorTranscriber.setLang(fromLang.code);
+  }, [fromLang, toLang, consoleTranscriber, monitorTranscriber]);
 
   // ── Monitor toggle ──
   const handleMonitorToggle = useCallback(
@@ -298,15 +278,13 @@ const Index = () => {
         monitorTranslationSeq.current = 0;
         setActiveMessage(null);
 
-        const monitor = new DeepgramTranscriber(
-          toLang.speechCode,
+        monitorTranscriber.start(
+          toLang.code,
           (text, isFinal) => {
             if (isFinal) {
-              // Append finalized segment to the single active block
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
-              // Update active message immediately with original text + flag
               setActiveMessage({
                 original: finalSoFar,
                 interimSuffix: "",
@@ -316,14 +294,13 @@ const Index = () => {
                 targetFlag: fromLangRef.current.flag,
               });
 
-              // Full-context re-translation: translate entire accumulated text
+              // Full-context re-translation
               const fullText = activeFinalRef.current.trim();
               if (fullText) {
                 const seqId = ++monitorTranslationSeq.current;
                 pendingMonitorTranslations.current++;
                 translateText(fullText, toLangRef.current.name, fromLangRef.current.name)
                   .then((result) => {
-                    // Only apply if this is still the latest request
                     if (seqId === monitorTranslationSeq.current) {
                       activeTranslatedRef.current = result;
                       setActiveMessage((prev) =>
@@ -337,7 +314,6 @@ const Index = () => {
                   });
               }
             } else {
-              // Interim: show partial text immediately with flag
               const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
 
@@ -351,23 +327,14 @@ const Index = () => {
               });
             }
           },
-          undefined,
           (error) => {
             toast({ variant: "destructive", title: "Monitor error", description: error });
             setIsMonitoring(false);
           }
         );
-
-        monitorRef.current = monitor;
-        monitor.start();
       } else {
-        // Graceful stop — wait for Deepgram to flush remaining finals
-        const monitor = monitorRef.current;
-        monitorRef.current = null;
-
-        if (monitor) {
-          await monitor.stopGracefully(3000);
-        }
+        // Stop monitor
+        monitorTranscriber.stop();
 
         // Wait for any pending segment translations to finish
         const waitForTranslations = () =>
@@ -385,13 +352,12 @@ const Index = () => {
         await waitForTranslations();
         await finalizeActiveBlock();
 
-        // Wait for the final refinement pass to complete
         if (pendingRefinement.current) {
           await pendingRefinement.current;
         }
       }
     },
-    [fromLang, toLang, finalizeActiveBlock]
+    [fromLang, toLang, finalizeActiveBlock, monitorTranscriber]
   );
 
   return (
