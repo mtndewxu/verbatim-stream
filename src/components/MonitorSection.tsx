@@ -52,9 +52,9 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
   }, [entries, activeMessage?.original, activeMessage?.interimSuffix, activeMessage?.translated, activeMessage?.interimTranslation]);
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col bg-card/30 backdrop-blur-sm">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border/30">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Conversation
         </h2>
@@ -71,7 +71,7 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
 
       {/* Messages — flex column with constrained overflow */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="flex flex-col px-5 py-3 gap-3">
+        <div className="flex flex-col px-5 py-3 gap-3 [&>div]:bg-card/50 [&>div]:backdrop-blur-md">
           {entries.length === 0 && !activeMessage && (
             <div className="flex items-center justify-center h-32">
               <p className="text-sm text-muted-foreground">

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
+import { Palette } from "lucide-react";
 import { MonitorSection, type ConversationEntry } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { DeepgramTranscriber } from "@/lib/deepgram";
@@ -7,6 +8,8 @@ import { translateText } from "@/lib/translate";
 import { playTranslation } from "@/lib/tts";
 import { getLanguage, type Language } from "@/lib/languages";
 import { toast } from "@/hooks/use-toast";
+import { useDynamicTheme, type AppThemeState } from "@/hooks/use-dynamic-theme";
+import { useSilenceDetector } from "@/hooks/use-silence-detector";
 
 const Index = () => {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
@@ -18,6 +21,7 @@ const Index = () => {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [lastSpeechTs, setLastSpeechTs] = useState(Date.now());
 
   // Active message state for continuous merging — single block per session
   const [activeMessage, setActiveMessage] = useState<{
@@ -42,6 +46,18 @@ const Index = () => {
   // Keep refs in sync
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
+
+  // Dynamic theming
+  const theme = useDynamicTheme();
+  const themeState: AppThemeState = isMonitoring
+    ? "monitoring"
+    : isRecording
+    ? "recording"
+    : "default";
+  const bgColor = theme.getBackground(themeState);
+
+  // Silence detector
+  useSilenceDetector(isMonitoring, lastSpeechTs);
 
   // Auto-scroll whenever activeMessage or entries change
   useEffect(() => {
@@ -90,7 +106,6 @@ const Index = () => {
   );
 
   // Finalize the active block → move to entries (only called when monitor stops)
-  // TTS is disabled in monitor mode — visual subtitles only
   const finalizeActiveBlock = useCallback(() => {
     const text = activeFinalRef.current.trim();
     const translated = activeTranslatedRef.current.trim();
@@ -188,16 +203,16 @@ const Index = () => {
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
         setActiveMessage(null);
+        setLastSpeechTs(Date.now());
 
         const monitor = new DeepgramTranscriber(
           toLang.speechCode,
           (text, isFinal) => {
+            setLastSpeechTs(Date.now());
             if (isFinal) {
-              // Append finalized segment to the single active block
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
-              // Update active message immediately with original text
               setActiveMessage({
                 original: finalSoFar,
                 interimSuffix: "",
@@ -205,7 +220,6 @@ const Index = () => {
                 interimTranslation: "",
               });
 
-              // Segmented translation: only translate the NEW segment, then append
               translateText(text.trim(), toLangRef.current.name, fromLangRef.current.name)
                 .then((segmentTranslation) => {
                   activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
@@ -215,7 +229,6 @@ const Index = () => {
                 })
                 .catch(() => {});
             } else {
-              // Interim: show partial text immediately
               const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
 
@@ -237,7 +250,6 @@ const Index = () => {
         monitorRef.current = monitor;
         monitor.start();
       } else {
-        // Stop — finalize remaining active block into entries
         finalizeActiveBlock();
         monitorRef.current?.stop();
         monitorRef.current = null;
@@ -247,20 +259,49 @@ const Index = () => {
   );
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background">
+    <div
+      className="h-screen flex flex-col overflow-hidden"
+      style={{
+        backgroundColor: bgColor,
+        transition: "background-color 0.8s cubic-bezier(0.4, 0, 0.2, 1)",
+      }}
+    >
       {/* Top bar */}
-      <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-card">
-        <h1 className="text-base font-semibold text-foreground tracking-tight">Translator</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Monitor
-          </span>
-          <Switch checked={isMonitoring} onCheckedChange={handleMonitorToggle} />
+      <header className="flex items-center justify-between px-5 py-3 border-b border-border/40 bg-card/60 backdrop-blur-xl">
+        <h1 className="text-base font-semibold text-foreground tracking-tight">Global Talk</h1>
+        <div className="flex items-center gap-3">
+          {/* Palette toggle */}
+          <button
+            onClick={theme.cyclePalette}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-all active:scale-90 ${
+              theme.isLocked
+                ? "bg-primary/15 text-primary"
+                : "bg-secondary/60 text-muted-foreground hover:text-foreground"
+            }`}
+            aria-label="Change palette"
+            title={theme.isLocked ? "Unlock color" : `Palette: ${theme.palette.label}`}
+          >
+            <Palette className="w-4 h-4" />
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Monitor
+            </span>
+            <Switch checked={isMonitoring} onCheckedChange={handleMonitorToggle} />
+          </div>
         </div>
       </header>
 
       {/* Monitor (top ~60%) */}
       <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
+
+      {/* Guide card */}
+      <div className="px-5 py-2">
+        <div className="rounded-2xl px-4 py-3 text-[11px] leading-relaxed text-muted-foreground bg-card/40 backdrop-blur-md border border-border/30">
+          <span className="font-semibold text-foreground/70">Incoming:</span> Enable Monitor to translate the other party. Turn off after the session.{" "}
+          <span className="font-semibold text-foreground/70">Outgoing:</span> Tap Speaker for your turn; use the Loudspeaker icon for playback.
+        </div>
+      </div>
 
       {/* Console (bottom ~40%) */}
       <ConsoleSection
