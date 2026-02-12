@@ -92,14 +92,12 @@ const Index = () => {
   );
 
   // Finalize the active block → move to entries (only called when monitor stops)
+  // TTS is disabled in monitor mode — visual subtitles only
   const finalizeActiveBlock = useCallback(() => {
     const text = activeFinalRef.current.trim();
     const translated = activeTranslatedRef.current.trim();
     if (text) {
       addEntry(text, translated, fromLangRef.current, toLangRef.current, "Speaker");
-      if (translated) {
-        playTranslation(translated).catch(() => {});
-      }
     }
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
@@ -202,7 +200,7 @@ const Index = () => {
           fromLang.speechCode,
           (text, isFinal) => {
             if (isFinal) {
-              // Append finalized text to the single active block
+              // Append finalized segment to the single active block
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
@@ -221,20 +219,19 @@ const Index = () => {
                 interimTranslation: "",
               });
 
-              // Parallel translation: translate immediately on isFinal
-              translateText(finalSoFar, fromLangRef.current.name, toLangRef.current.name)
-                .then((t) => {
-                  activeTranslatedRef.current = t;
+              // Segmented translation: only translate the NEW segment, then append
+              translateText(text.trim(), fromLangRef.current.name, toLangRef.current.name)
+                .then((segmentTranslation) => {
+                  activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
                   setActiveMessage((prev) =>
-                    prev ? { ...prev, translated: t, interimTranslation: "" } : null
+                    prev ? { ...prev, translated: activeTranslatedRef.current, interimTranslation: "" } : null
                   );
                 })
                 .catch(() => {});
             } else {
-              // Interim: immediately initialize activeMessage if this is the first word
+              // Interim: show partial text immediately
               const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
-              const fullPreview = (activeFinalRef.current + text).trim();
 
               setActiveMessage({
                 original: currentFinal,
@@ -242,25 +239,6 @@ const Index = () => {
                 translated: activeTranslatedRef.current,
                 interimTranslation: "",
               });
-
-              // Zero-latency: translate interim with short debounce
-              if (interimTranslateTimer.current) clearTimeout(interimTranslateTimer.current);
-              if (fullPreview.length > 5 && fullPreview !== lastInterimTranslated.current) {
-                interimTranslateTimer.current = setTimeout(() => {
-                  lastInterimTranslated.current = fullPreview;
-                  translateText(fullPreview, fromLangRef.current.name, toLangRef.current.name)
-                    .then((t) => {
-                      const existingTranslation = activeTranslatedRef.current;
-                      const interimExtra = existingTranslation
-                        ? t.replace(existingTranslation, "").trim()
-                        : t;
-                      setActiveMessage((prev) =>
-                        prev ? { ...prev, interimTranslation: interimExtra || t } : null
-                      );
-                    })
-                    .catch(() => {});
-                }, 150);
-              }
             }
           },
           undefined,
