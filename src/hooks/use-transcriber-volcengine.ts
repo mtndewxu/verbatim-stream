@@ -6,8 +6,10 @@ const PROXY_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/volcengine
 
 /**
  * Volcengine 同声传译 hook.
- * Same interface as EL/DG hooks: start(langCode, onResult, onError).
- * Additionally exposes onTranslation callback for the built-in translation.
+ * Features:
+ * - Auto language detection (zh↔en)
+ * - Audio buffering during initialization
+ * - Separate callbacks for source text and translation
  */
 export function useVolcengineTranscriber() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -16,18 +18,124 @@ export function useVolcengineTranscriber() {
   const streamRef = useRef<MediaStream | null>(null);
   const onResultRef = useRef<TranscriptCallback | null>(null);
   const onErrorRef = useRef<((error: string) => void) | null>(null);
-  const targetLangRef = useRef("en");
   const onTranslationRef = useRef<TranscriptCallback | null>(null);
+  const onLangDetectedRef = useRef<((lang: string) => void) | null>(null);
 
-  /** Set target language before calling start. */
-  const setTargetLang = useCallback((lang: string) => {
-    targetLangRef.current = lang;
-  }, []);
+  // Audio buffer for pre-ready period
+  const audioBufferRef = useRef<ArrayBuffer[]>([]);
+  const isReadyRef = useRef(false);
+
+  // Current connection params for auto-reconnect
+  const currentSourceRef = useRef("zh");
+  const currentTargetRef = useRef("en");
+  const hasReconnectedRef = useRef(false);
 
   /** Set callback for receiving built-in translations from Volcengine. */
   const setOnTranslation = useCallback((cb: TranscriptCallback | null) => {
     onTranslationRef.current = cb;
   }, []);
+
+  /** Set callback for language detection notifications. */
+  const setOnLangDetected = useCallback((cb: ((lang: string) => void) | null) => {
+    onLangDetectedRef.current = cb;
+  }, []);
+
+  const connectWebSocket = useCallback((
+    sourceLang: string,
+    targetLang: string,
+  ) => {
+    const wsUrl = PROXY_BASE
+      .replace("https://", "wss://")
+      .replace("http://", "ws://")
+      + `?source=${sourceLang}&target=${targetLang}`;
+
+    console.log(`[Volc] Connecting: source=${sourceLang} target=${targetLang}`);
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    isReadyRef.current = false;
+    currentSourceRef.current = sourceLang;
+    currentTargetRef.current = targetLang;
+
+    return new Promise<WebSocket>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Connection timeout")), 15000);
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+          if (msg.type === "ready") {
+            clearTimeout(timeout);
+            isReadyRef.current = true;
+            // Flush buffered audio
+            const buffered = audioBufferRef.current;
+            console.log(`[Volc] Ready! Flushing ${buffered.length} buffered chunks`);
+            for (const chunk of buffered) {
+              if (ws.readyState === WebSocket.OPEN) ws.send(chunk);
+            }
+            audioBufferRef.current = [];
+            resolve(ws);
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => { clearTimeout(timeout); reject(new Error("WebSocket connection failed")); };
+      ws.onclose = () => { clearTimeout(timeout); reject(new Error("WebSocket closed before ready")); };
+    });
+  }, []);
+
+  const setupMessageHandler = useCallback((ws: WebSocket) => {
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data as string);
+        if (msg.type === "partial") {
+          onResultRef.current?.(msg.text, false);
+        } else if (msg.type === "final") {
+          onResultRef.current?.(msg.text, true);
+          // Check language detection for auto-reconnect
+          if (msg.detected_lang && !hasReconnectedRef.current) {
+            onLangDetectedRef.current?.(msg.detected_lang);
+            // If detected language doesn't match current source, need to swap
+            if (msg.detected_lang !== currentSourceRef.current) {
+              console.log(`[Volc] Language mismatch: expected ${currentSourceRef.current}, detected ${msg.detected_lang}. Auto-reconnecting…`);
+              hasReconnectedRef.current = true;
+              // Auto-reconnect with swapped languages
+              autoReconnect();
+            }
+          }
+        } else if (msg.type === "translation_partial") {
+          onTranslationRef.current?.(msg.translation, false);
+        } else if (msg.type === "translation_final") {
+          onTranslationRef.current?.(msg.translation, true);
+        } else if (msg.type === "error") {
+          console.error("[Volc] Server error:", msg.message);
+          onErrorRef.current?.(msg.message || "Volcengine error");
+        }
+      } catch {}
+    };
+    ws.onclose = () => console.log("[Volc] WebSocket closed");
+    ws.onerror = () => onErrorRef.current?.("Volcengine connection error");
+  }, []);
+
+  const autoReconnect = useCallback(async () => {
+    const oldWs = wsRef.current;
+    const swappedSource = currentTargetRef.current;
+    const swappedTarget = currentSourceRef.current;
+
+    try {
+      // Close old connection gracefully
+      if (oldWs && oldWs.readyState === WebSocket.OPEN) {
+        oldWs.send(JSON.stringify({ type: "audio_end" }));
+        setTimeout(() => { try { oldWs.close(1000); } catch {} }, 200);
+      }
+
+      // Open new connection with swapped languages
+      const newWs = await connectWebSocket(swappedSource, swappedTarget);
+      setupMessageHandler(newWs);
+      console.log(`[Volc] Reconnected with source=${swappedSource} target=${swappedTarget} ✓`);
+    } catch (e: any) {
+      console.error("[Volc] Auto-reconnect failed:", e);
+    }
+  }, [connectWebSocket, setupMessageHandler]);
 
   const start = useCallback(async (
     langCode: string,
@@ -36,55 +144,17 @@ export function useVolcengineTranscriber() {
   ) => {
     onResultRef.current = onResult;
     onErrorRef.current = onError || null;
+    hasReconnectedRef.current = false;
+    audioBufferRef.current = [];
 
-    // Map language codes: Volcengine uses "zh" / "en"
-    const sourceLang = langCode.startsWith("zh") ? "zh" : langCode.startsWith("en") ? "en" : langCode.split("-")[0];
-    const targetLang = targetLangRef.current;
+    // Default: zh→en, but use langCode to determine initial direction
+    const sourceLang = langCode.startsWith("en") ? "en" : "zh";
+    const targetLang = sourceLang === "zh" ? "en" : "zh";
 
     try {
-      const wsUrl = PROXY_BASE
-        .replace("https://", "wss://")
-        .replace("http://", "ws://")
-        + `?source=${sourceLang}&target=${targetLang}`;
-
-      console.log("[Volc] Connecting to proxy:", wsUrl);
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Connection timeout")), 15000);
-
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data as string);
-            if (msg.type === "ready") {
-              clearTimeout(timeout);
-              resolve();
-            }
-          } catch {}
-        };
-
-        ws.onerror = () => {
-          clearTimeout(timeout);
-          reject(new Error("WebSocket connection failed"));
-        };
-
-        ws.onclose = () => {
-          clearTimeout(timeout);
-          reject(new Error("WebSocket closed before ready"));
-        };
-      });
-
-      console.log("[Volc] Proxy ready, starting mic…");
-
+      // Start mic BEFORE WebSocket is ready (to buffer audio)
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
       });
       streamRef.current = stream;
 
@@ -96,47 +166,32 @@ export function useVolcengineTranscriber() {
       const worklet = new AudioWorkletNode(audioContext, "deepgram-processor");
       workletRef.current = worklet;
 
+      // Audio data handler — buffers until ready, then sends directly
       worklet.port.onmessage = (e: MessageEvent) => {
-        if (ws.readyState === WebSocket.OPEN && e.data instanceof ArrayBuffer) {
-          ws.send(e.data);
+        if (e.data instanceof ArrayBuffer) {
+          const ws = wsRef.current;
+          if (isReadyRef.current && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(e.data);
+          } else {
+            // Buffer audio while connecting
+            audioBufferRef.current.push(e.data);
+          }
         }
       };
 
       source.connect(worklet);
       worklet.connect(audioContext.destination);
 
-      // Setup message handler
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data as string);
-          if (msg.type === "partial") {
-            // Source text (partial)
-            onResultRef.current?.(msg.text, false);
-          } else if (msg.type === "final") {
-            // Source text (final)
-            onResultRef.current?.(msg.text, true);
-          } else if (msg.type === "translation_partial") {
-            // Translation (partial)
-            onTranslationRef.current?.(msg.translation, false);
-          } else if (msg.type === "translation_final") {
-            // Translation (final)
-            onTranslationRef.current?.(msg.translation, true);
-          } else if (msg.type === "error") {
-            console.error("[Volc] Server error:", msg.message);
-            onErrorRef.current?.(msg.message || "Volcengine error");
-          }
-        } catch {}
-      };
-
-      ws.onclose = () => console.log("[Volc] WebSocket closed");
-      ws.onerror = () => onErrorRef.current?.("Volcengine connection error");
+      // Now connect WebSocket (mic is already recording & buffering)
+      const ws = await connectWebSocket(sourceLang, targetLang);
+      setupMessageHandler(ws);
 
       console.log("[Volc] Streaming started ✓");
     } catch (e: any) {
       console.error("[Volc] Start error:", e);
       onError?.(e.message || "Failed to start Volcengine");
     }
-  }, []);
+  }, [connectWebSocket, setupMessageHandler]);
 
   const stop = useCallback(() => {
     console.log("[Volc] Stopping…");
@@ -153,6 +208,8 @@ export function useVolcengineTranscriber() {
     if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
 
+    audioBufferRef.current = [];
+    isReadyRef.current = false;
     onResultRef.current = null;
     onErrorRef.current = null;
   }, []);
@@ -161,13 +218,11 @@ export function useVolcengineTranscriber() {
     console.log("[Volc] Language change requires reconnection");
   }, []);
 
+  // Keep for backward compat but not used in auto-detect mode
+  const setTargetLang = useCallback((_lang: string) => {}, []);
+
   return {
-    start,
-    stop,
-    setLang,
-    setTargetLang,
-    setOnTranslation,
-    isConnected: false,
-    status: "disconnected" as const,
+    start, stop, setLang, setTargetLang, setOnTranslation, setOnLangDetected,
+    isConnected: false, status: "disconnected" as const,
   };
 }
