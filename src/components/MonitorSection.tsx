@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { Volume2 } from "lucide-react";
+import { playTranslation } from "@/lib/tts";
 
 export interface ConversationEntry {
   id: string;
@@ -48,6 +50,19 @@ function AudioWaveVisualizer() {
 
 export function MonitorSection({ entries, isMonitoring, activeMessage }: MonitorSectionProps) {
   const scrollAnchor = useRef<HTMLDivElement>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
+  const handlePlay = async (id: string, text: string) => {
+    if (playingId) return;
+    setPlayingId(id);
+    try {
+      await playTranslation(text);
+    } catch {
+      // ignore
+    } finally {
+      setPlayingId(null);
+    }
+  };
 
   useLayoutEffect(() => {
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth" });
@@ -86,8 +101,20 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
               key={entry.id}
               className="bg-card rounded-2xl px-4 py-3 shadow-sm border border-border"
             >
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-                {entry.speaker}
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  {entry.speaker}
+                </span>
+                {entry.translated && (
+                  <button
+                    onClick={() => handlePlay(entry.id, entry.translated)}
+                    disabled={playingId !== null}
+                    className="p-1 rounded-full hover:bg-secondary transition-colors disabled:opacity-40"
+                    aria-label="Play translation"
+                  >
+                    <Volume2 className={`w-3.5 h-3.5 ${playingId === entry.id ? "text-primary animate-pulse" : "text-muted-foreground"}`} />
+                  </button>
+                )}
               </div>
               <p className="text-sm text-foreground leading-relaxed">
                 {entry.fromFlag} {entry.original}
