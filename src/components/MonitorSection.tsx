@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export interface ConversationEntry {
   id: string;
@@ -46,10 +45,10 @@ function AudioWaveVisualizer() {
 }
 
 export function MonitorSection({ entries, isMonitoring, activeMessage }: MonitorSectionProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollAnchor = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    scrollAnchor.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries, activeMessage?.original, activeMessage?.interimSuffix, activeMessage?.translated, activeMessage?.interimTranslation]);
 
   return (
@@ -70,9 +69,9 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
         )}
       </div>
 
-      {/* Messages */}
-      <ScrollArea className="flex-1">
-        <div className="px-5 py-3 space-y-3">
+      {/* Messages — flex column with constrained overflow */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex flex-col px-5 py-3 gap-3">
           {entries.length === 0 && !activeMessage && (
             <div className="flex items-center justify-center h-32">
               <p className="text-sm text-muted-foreground">
@@ -121,9 +120,10 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
             </div>
           )}
 
-          <div ref={bottomRef} />
+          {/* Scroll anchor */}
+          <div ref={scrollAnchor} />
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
