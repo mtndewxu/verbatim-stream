@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
-import { MonitorSection, type ConversationEntry } from "@/components/MonitorSection";
+import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { DeepgramTranscriber } from "@/lib/deepgram";
 import { translateText } from "@/lib/translate";
@@ -20,12 +20,7 @@ const Index = () => {
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
 
   // Active message state for continuous merging — single block per session
-  const [activeMessage, setActiveMessage] = useState<{
-    original: string;
-    interimSuffix: string;
-    translated: string;
-    interimTranslation: string;
-  } | null>(null);
+  const [activeMessage, setActiveMessage] = useState<ActiveMessage | null>(null);
 
   const monitorRef = useRef<DeepgramTranscriber | null>(null);
   const recorderRef = useRef<DeepgramTranscriber | null>(null);
@@ -91,11 +86,22 @@ const Index = () => {
 
   // Finalize the active block → move to entries (only called when monitor stops)
   // TTS is disabled in monitor mode — visual subtitles only
-  const finalizeActiveBlock = useCallback(() => {
+  const finalizeActiveBlock = useCallback(async () => {
     const text = activeFinalRef.current.trim();
-    const translated = activeTranslatedRef.current.trim();
+    let translated = activeTranslatedRef.current.trim();
+
+    // If there's untranslated text remaining, translate it before finalizing
+    if (text && !translated) {
+      try {
+        translated = await translateText(text, toLangRef.current.name, fromLangRef.current.name);
+      } catch {
+        // proceed with whatever we have
+      }
+    }
+
     if (text) {
-      addEntry(text, translated, fromLangRef.current, toLangRef.current, "Speaker");
+      // Monitor: source is toLang, target is fromLang
+      addEntry(text, translated, toLangRef.current, fromLangRef.current, "Speaker");
     }
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
@@ -180,7 +186,7 @@ const Index = () => {
   }, [fromLang, toLang]);
 
   const handleMonitorToggle = useCallback(
-    (checked: boolean) => {
+    async (checked: boolean) => {
       haptic();
       setIsMonitoring(checked);
       if (checked) {
@@ -203,6 +209,8 @@ const Index = () => {
                 interimSuffix: "",
                 translated: activeTranslatedRef.current,
                 interimTranslation: "",
+                sourceFlag: toLangRef.current.flag,
+                targetFlag: fromLangRef.current.flag,
               });
 
               // Segmented translation: only translate the NEW segment, then append
@@ -224,6 +232,8 @@ const Index = () => {
                 interimSuffix,
                 translated: activeTranslatedRef.current,
                 interimTranslation: "",
+                sourceFlag: toLangRef.current.flag,
+                targetFlag: fromLangRef.current.flag,
               });
             }
           },
@@ -237,10 +247,10 @@ const Index = () => {
         monitorRef.current = monitor;
         monitor.start();
       } else {
-        // Stop — finalize remaining active block into entries
-        finalizeActiveBlock();
+        // Stop — finalize remaining active block into entries (await translation)
         monitorRef.current?.stop();
         monitorRef.current = null;
+        await finalizeActiveBlock();
       }
     },
     [fromLang, toLang, finalizeActiveBlock]

@@ -30,6 +30,7 @@ export class DeepgramTranscriber {
   private readonly RECONNECT_BASE_DELAY = 1000;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retryToastShown = false;
+  private preConnectBuffer: ArrayBuffer[] = [];
 
   constructor(
     private lang: string,
@@ -51,6 +52,7 @@ export class DeepgramTranscriber {
     this.running = true;
     this.reconnectAttempts = 0;
     this.retryToastShown = false;
+    this.preConnectBuffer = [];
     console.log("[Deepgram] Starting transcriber, lang:", this.lang);
 
     try {
@@ -62,7 +64,9 @@ export class DeepgramTranscriber {
         console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
       }
 
+      // Start audio pipeline FIRST so audio is buffered during WS handshake
       await this.setupAudioWorklet();
+      // WS connects in parallel; buffered audio flushed on open
       await this.connectWebSocket();
     } catch (e: any) {
       console.error("[Deepgram] Start error:", e);
@@ -85,6 +89,9 @@ export class DeepgramTranscriber {
     this.workletNode.port.onmessage = (event: MessageEvent) => {
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(event.data);
+      } else {
+        // Buffer audio while WebSocket is still connecting
+        this.preConnectBuffer.push(event.data as ArrayBuffer);
       }
     };
 
@@ -111,6 +118,15 @@ export class DeepgramTranscriber {
       console.log("[Deepgram] WebSocket connected ✓ (attempt", this.reconnectAttempts, ")");
       this.reconnectAttempts = 0;
       this.retryToastShown = false;
+
+      // Flush any audio buffered during the handshake
+      if (this.preConnectBuffer.length > 0) {
+        console.log(`[Deepgram] Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
+        for (const chunk of this.preConnectBuffer) {
+          this.ws!.send(chunk);
+        }
+        this.preConnectBuffer = [];
+      }
     };
 
     this.ws.onmessage = (event) => {

@@ -9,11 +9,13 @@ export interface ConversationEntry {
   toFlag: string;
 }
 
-interface ActiveMessage {
+export interface ActiveMessage {
   original: string;
   interimSuffix: string;
   translated: string;
   interimTranslation: string;
+  sourceFlag: string;
+  targetFlag: string;
 }
 
 interface MonitorSectionProps {
@@ -104,14 +106,14 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
               </div>
               <p className="text-sm leading-relaxed">
-                <span className="text-foreground">{activeMessage.original}</span>
+                <span className="text-foreground">{activeMessage.sourceFlag} {activeMessage.original}</span>
                 {activeMessage.interimSuffix && (
                   <span className="text-muted-foreground/50">{activeMessage.interimSuffix}</span>
                 )}
               </p>
               {(activeMessage.translated || activeMessage.interimTranslation) && (
                 <p className="text-sm leading-relaxed mt-1">
-                  <span className="font-semibold text-primary">→ {activeMessage.translated}</span>
+                  <span className="font-semibold text-primary">→ {activeMessage.targetFlag} {activeMessage.translated}</span>
                   {activeMessage.interimTranslation && (
                     <span className="text-primary/40 italic"> {activeMessage.interimTranslation}</span>
                   )}
