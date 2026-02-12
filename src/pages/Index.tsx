@@ -27,9 +27,15 @@ const Index = () => {
   const finalTextRef = useRef("");
   const isRecordingRef = useRef(false);
 
+  // Console streaming translation refs
+  const consoleFinalRef = useRef("");
+  const consoleTranslatedRef = useRef("");
+  const pendingConsoleTranslations = useRef(0);
+
   // Monitor merging refs — one block for entire session
   const activeFinalRef = useRef("");
   const activeTranslatedRef = useRef("");
+  const pendingMonitorTranslations = useRef(0);
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
@@ -47,28 +53,6 @@ const Index = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  const translateAndSpeak = useCallback(
-    async (text: string, from: Language, to: Language, autoPlay = false) => {
-      if (!text.trim()) return "";
-      setIsTranslating(true);
-      try {
-        const result = await translateText(text.trim(), from.name, to.name);
-        setIsTranslating(false);
-        if (autoPlay && result) {
-          playTranslation(result).catch((e) =>
-            toast({ variant: "destructive", title: "Playback error", description: e.message })
-          );
-        }
-        return result;
-      } catch (e: any) {
-        setIsTranslating(false);
-        toast({ variant: "destructive", title: "Translation error", description: e.message });
-        return "";
-      }
-    },
-    []
-  );
-
   const addEntry = useCallback(
     (original: string, translated: string, from: Language, to: Language, speaker = "You") => {
       const entry: ConversationEntry = {
@@ -85,7 +69,6 @@ const Index = () => {
   );
 
   // Finalize the active block → move to entries (only called when monitor stops)
-  // TTS is disabled in monitor mode — visual subtitles only
   const finalizeActiveBlock = useCallback(async () => {
     const text = activeFinalRef.current.trim();
     let translated = activeTranslatedRef.current.trim();
@@ -105,27 +88,54 @@ const Index = () => {
     }
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
+    pendingMonitorTranslations.current = 0;
     setActiveMessage(null);
   }, [addEntry]);
 
+  // ── Console: Record with Deepgram + streaming translation ──
   const handleRecord = useCallback(() => {
     haptic();
     if (isRecording) {
+      // Stop recording
       isRecordingRef.current = false;
-      recorderRef.current?.stop();
-      recorderRef.current = null;
       setIsRecording(false);
 
-      const text = finalTextRef.current;
-      if (text.trim()) {
-        translateAndSpeak(text, fromLang, toLang).then((translated) => {
-          if (translated) {
-            setTranslationText(translated);
-            addEntry(text, translated, fromLang, toLang, "You");
+      // Graceful stop to capture remaining finals
+      const rec = recorderRef.current;
+      recorderRef.current = null;
+
+      if (rec) {
+        rec.stopGracefully(3000).then(() => {
+          // After all finals received, check if we still need a final translation
+          const text = consoleFinalRef.current.trim();
+          const translated = consoleTranslatedRef.current.trim();
+
+          if (text && !translated) {
+            // No translation came in yet, do a full translate
+            setIsTranslating(true);
+            translateText(text, fromLangRef.current.name, toLangRef.current.name)
+              .then((result) => {
+                setTranslationText(result);
+                consoleTranslatedRef.current = result;
+                addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
+                // Auto-play the final translation
+                if (result) playTranslation(result).catch(() => {});
+              })
+              .catch((e) => toast({ variant: "destructive", title: "Translation error", description: e.message }))
+              .finally(() => setIsTranslating(false));
+          } else if (text) {
+            // Translation already streamed in — archive it
+            addEntry(text, translated, fromLangRef.current, toLangRef.current, "You");
+            // Auto-play
+            if (translated) playTranslation(translated).catch(() => {});
           }
         });
       }
     } else {
+      // Start recording
+      consoleFinalRef.current = "";
+      consoleTranslatedRef.current = "";
+      pendingConsoleTranslations.current = 0;
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
@@ -136,8 +146,29 @@ const Index = () => {
         (text, isFinal) => {
           if (isFinal) {
             finalTextRef.current += text + " ";
-            setSpeechText(finalTextRef.current.trim());
+            consoleFinalRef.current = finalTextRef.current.trim();
+            setSpeechText(consoleFinalRef.current);
+
+            // Streaming translation: translate each new segment immediately
+            const segment = text.trim();
+            if (segment) {
+              pendingConsoleTranslations.current++;
+              setIsTranslating(true);
+              translateText(segment, fromLangRef.current.name, toLangRef.current.name)
+                .then((segResult) => {
+                  consoleTranslatedRef.current = (consoleTranslatedRef.current + " " + segResult).trim();
+                  setTranslationText(consoleTranslatedRef.current);
+                })
+                .catch(() => {})
+                .finally(() => {
+                  pendingConsoleTranslations.current--;
+                  if (pendingConsoleTranslations.current <= 0) {
+                    setIsTranslating(false);
+                  }
+                });
+            }
           } else {
+            // Interim: show partial text immediately
             setSpeechText((finalTextRef.current + text).trim());
           }
         },
@@ -156,7 +187,7 @@ const Index = () => {
       rec.start();
       setIsRecording(true);
     }
-  }, [isRecording, fromLang, toLang, translateAndSpeak, addEntry]);
+  }, [isRecording, fromLang, toLang, addEntry]);
 
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
@@ -176,15 +207,18 @@ const Index = () => {
     setSpeechText("");
     setTranslationText("");
     finalTextRef.current = "";
+    consoleFinalRef.current = "";
+    consoleTranslatedRef.current = "";
   }, []);
 
   const handleSwapLangs = useCallback(() => {
     setFromLang(toLang);
     setToLang(fromLang);
     if (recorderRef.current) recorderRef.current.setLang(toLang.speechCode);
-    if (monitorRef.current) monitorRef.current.setLang(toLang.speechCode);
+    if (monitorRef.current) monitorRef.current.setLang(fromLang.speechCode);
   }, [fromLang, toLang]);
 
+  // ── Monitor toggle ──
   const handleMonitorToggle = useCallback(
     async (checked: boolean) => {
       haptic();
@@ -193,6 +227,7 @@ const Index = () => {
         // Start fresh — single active block for entire session
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
+        pendingMonitorTranslations.current = 0;
         setActiveMessage(null);
 
         const monitor = new DeepgramTranscriber(
@@ -203,7 +238,7 @@ const Index = () => {
               activeFinalRef.current += text + " ";
               const finalSoFar = activeFinalRef.current.trim();
 
-              // Update active message immediately with original text
+              // Update active message immediately with original text + flag
               setActiveMessage({
                 original: finalSoFar,
                 interimSuffix: "",
@@ -214,16 +249,23 @@ const Index = () => {
               });
 
               // Segmented translation: only translate the NEW segment, then append
-              translateText(text.trim(), toLangRef.current.name, fromLangRef.current.name)
-                .then((segmentTranslation) => {
-                  activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
-                  setActiveMessage((prev) =>
-                    prev ? { ...prev, translated: activeTranslatedRef.current, interimTranslation: "" } : null
-                  );
-                })
-                .catch(() => {});
+              const segment = text.trim();
+              if (segment) {
+                pendingMonitorTranslations.current++;
+                translateText(segment, toLangRef.current.name, fromLangRef.current.name)
+                  .then((segmentTranslation) => {
+                    activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
+                    setActiveMessage((prev) =>
+                      prev ? { ...prev, translated: activeTranslatedRef.current, interimTranslation: "" } : null
+                    );
+                  })
+                  .catch(() => {})
+                  .finally(() => {
+                    pendingMonitorTranslations.current--;
+                  });
+              }
             } else {
-              // Interim: show partial text immediately
+              // Interim: show partial text immediately with flag
               const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
 
@@ -247,9 +289,28 @@ const Index = () => {
         monitorRef.current = monitor;
         monitor.start();
       } else {
-        // Stop — finalize remaining active block into entries (await translation)
-        monitorRef.current?.stop();
+        // Graceful stop — wait for Deepgram to flush remaining finals
+        const monitor = monitorRef.current;
         monitorRef.current = null;
+
+        if (monitor) {
+          await monitor.stopGracefully(3000);
+        }
+
+        // Wait for any pending segment translations to finish
+        const waitForTranslations = () =>
+          new Promise<void>((resolve) => {
+            const check = () => {
+              if (pendingMonitorTranslations.current <= 0) {
+                resolve();
+              } else {
+                setTimeout(check, 100);
+              }
+            };
+            check();
+          });
+
+        await waitForTranslations();
         await finalizeActiveBlock();
       }
     },

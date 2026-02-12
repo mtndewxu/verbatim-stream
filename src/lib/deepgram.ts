@@ -226,6 +226,63 @@ export class DeepgramTranscriber {
     console.log("[Deepgram] Transcriber stopped ✓");
   }
 
+  /**
+   * Graceful stop: stops audio input, sends CloseStream, and waits for
+   * Deepgram to flush remaining finals before resolving.
+   */
+  stopGracefully(timeoutMs = 3000): Promise<void> {
+    return new Promise<void>((resolve) => {
+      console.log("[Deepgram] Graceful stop initiated…");
+      this.running = false;
+
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
+      // Stop audio input but keep WS open to receive remaining finals
+      this.workletNode?.disconnect();
+      this.workletNode = null;
+
+      if (this.audioCtx?.state !== "closed") {
+        this.audioCtx?.close().catch(() => {});
+      }
+      this.audioCtx = null;
+
+      this.mediaStream?.getTracks().forEach((t) => t.stop());
+      this.mediaStream = null;
+
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.ws = null;
+        console.log("[Deepgram] No open WS, resolving immediately");
+        resolve();
+        return;
+      }
+
+      // Timeout safety net
+      const timer = setTimeout(() => {
+        console.log("[Deepgram] Graceful stop timed out, forcing close");
+        this.ws?.close();
+        this.ws = null;
+        resolve();
+      }, timeoutMs);
+
+      // Listen for WS close (Deepgram closes after flushing finals)
+      const origOnClose = this.ws.onclose;
+      this.ws.onclose = (event) => {
+        clearTimeout(timer);
+        console.log("[Deepgram] WS closed gracefully after flush");
+        // Still fire original handler for any remaining messages
+        if (origOnClose) origOnClose.call(this.ws, event);
+        this.ws = null;
+        resolve();
+      };
+
+      // Send CloseStream to tell Deepgram to flush remaining audio
+      this.ws.send(JSON.stringify({ type: "CloseStream" }));
+    });
+  }
+
   private mapLang(speechCode: string): string {
     const map: Record<string, string> = {
       "zh-CN": "zh",
