@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Palette, Check } from "lucide-react";
 import {
@@ -29,7 +29,16 @@ const Index = () => {
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
   const [lastSpeechTs, setLastSpeechTs] = useState(Date.now());
 
+  // Monitor active message (incoming — left-aligned)
   const [activeMessage, setActiveMessage] = useState<{
+    original: string;
+    interimSuffix: string;
+    translated: string;
+    interimTranslation: string;
+  } | null>(null);
+
+  // Console active message (outgoing — right-aligned, real-time)
+  const [activeConsoleMessage, setActiveConsoleMessage] = useState<{
     original: string;
     interimSuffix: string;
     translated: string;
@@ -43,43 +52,22 @@ const Index = () => {
 
   const activeFinalRef = useRef("");
   const activeTranslatedRef = useRef("");
+
+  // Console refs for real-time tracking
+  const consoleFinalRef = useRef("");
+  const consoleTranslatedRef = useRef("");
+
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
-
   fromLangRef.current = fromLang;
   toLangRef.current = toLang;
 
-  // Dynamic theming
   const theme = useDynamicTheme();
-
-  // Silence detector
   useSilenceDetector(isMonitoring, lastSpeechTs);
 
   const haptic = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
-
-  const translateAndSpeak = useCallback(
-    async (text: string, from: Language, to: Language, autoPlay = false) => {
-      if (!text.trim()) return "";
-      setIsTranslating(true);
-      try {
-        const result = await translateText(text.trim(), from.name, to.name);
-        setIsTranslating(false);
-        if (autoPlay && result) {
-          playTranslation(result).catch((e) =>
-            toast({ variant: "destructive", title: "Playback error", description: e.message })
-          );
-        }
-        return result;
-      } catch (e: any) {
-        setIsTranslating(false);
-        toast({ variant: "destructive", title: "Translation error", description: e.message });
-        return "";
-      }
-    },
-    []
-  );
 
   const addEntry = useCallback(
     (original: string, translated: string, from: Language, to: Language, speaker = "You") => {
@@ -100,44 +88,99 @@ const Index = () => {
     const text = activeFinalRef.current.trim();
     const translated = activeTranslatedRef.current.trim();
     if (text) {
-      addEntry(text, translated, fromLangRef.current, toLangRef.current, "Speaker");
+      addEntry(text, translated, toLangRef.current, fromLangRef.current, "Speaker");
     }
     activeFinalRef.current = "";
     activeTranslatedRef.current = "";
     setActiveMessage(null);
   }, [addEntry]);
 
+  // ─── Speaker (Console) recording ─────────────────────────────
   const handleRecord = useCallback(() => {
     haptic();
     if (isRecording) {
+      // STOP recording
       isRecordingRef.current = false;
       recorderRef.current?.stop();
       recorderRef.current = null;
       setIsRecording(false);
 
-      const text = finalTextRef.current;
-      if (text.trim()) {
-        translateAndSpeak(text, fromLang, toLang).then((translated) => {
-          if (translated) {
-            setTranslationText(translated);
-            addEntry(text, translated, fromLang, toLang, "You");
-          }
-        });
+      // Finalize: archive console active message into entries
+      const text = consoleFinalRef.current.trim();
+      const alreadyTranslated = consoleTranslatedRef.current.trim();
+      setActiveConsoleMessage(null);
+
+      if (text) {
+        if (alreadyTranslated) {
+          // We already have translations from isFinal segments
+          addEntry(text, alreadyTranslated, fromLangRef.current, toLangRef.current, "You");
+          setTranslationText(alreadyTranslated);
+        } else {
+          // Fallback: translate everything now
+          setIsTranslating(true);
+          translateText(text, fromLangRef.current.name, toLangRef.current.name)
+            .then((result) => {
+              setTranslationText(result);
+              addEntry(text, result, fromLangRef.current, toLangRef.current, "You");
+            })
+            .catch((e) => toast({ variant: "destructive", title: "Translation error", description: e.message }))
+            .finally(() => setIsTranslating(false));
+        }
+        setSpeechText(text);
       }
+
+      consoleFinalRef.current = "";
+      consoleTranslatedRef.current = "";
     } else {
+      // START recording
+      consoleFinalRef.current = "";
+      consoleTranslatedRef.current = "";
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
       isRecordingRef.current = true;
 
+      // Show empty active bubble immediately
+      setActiveConsoleMessage({ original: "", interimSuffix: "", translated: "", interimTranslation: "" });
+
       const rec = new DeepgramTranscriber(
-        fromLang.speechCode,
+        fromLangRef.current.speechCode,
         (text, isFinal) => {
           if (isFinal) {
-            finalTextRef.current += text + " ";
-            setSpeechText(finalTextRef.current.trim());
+            // Fast-track: append final text instantly
+            consoleFinalRef.current += text + " ";
+            const finalSoFar = consoleFinalRef.current.trim();
+            setSpeechText(finalSoFar);
+
+            setActiveConsoleMessage((prev) => ({
+              original: finalSoFar,
+              interimSuffix: "",
+              translated: prev?.translated || consoleTranslatedRef.current,
+              interimTranslation: "",
+            }));
+
+            // Slow-track: translate this segment
+            translateText(text.trim(), fromLangRef.current.name, toLangRef.current.name)
+              .then((segmentTranslation) => {
+                consoleTranslatedRef.current = (consoleTranslatedRef.current + " " + segmentTranslation).trim();
+                const t = consoleTranslatedRef.current;
+                setTranslationText(t);
+                setActiveConsoleMessage((prev) =>
+                  prev ? { ...prev, translated: t } : null
+                );
+              })
+              .catch(() => {});
           } else {
-            setSpeechText((finalTextRef.current + text).trim());
+            // Fast-track: show interim ghost text immediately
+            const currentFinal = consoleFinalRef.current.trim();
+            setSpeechText((currentFinal + " " + text).trim());
+
+            setActiveConsoleMessage((prev) => ({
+              original: currentFinal,
+              interimSuffix: " " + text,
+              translated: prev?.translated || consoleTranslatedRef.current,
+              interimTranslation: "",
+            }));
           }
         },
         () => {
@@ -155,7 +198,7 @@ const Index = () => {
       rec.start();
       setIsRecording(true);
     }
-  }, [isRecording, fromLang, toLang, translateAndSpeak, addEntry]);
+  }, [isRecording, addEntry]);
 
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
@@ -175,15 +218,18 @@ const Index = () => {
     setSpeechText("");
     setTranslationText("");
     finalTextRef.current = "";
+    consoleFinalRef.current = "";
+    consoleTranslatedRef.current = "";
   }, []);
 
   const handleSwapLangs = useCallback(() => {
     setFromLang(toLang);
     setToLang(fromLang);
     if (recorderRef.current) recorderRef.current.setLang(toLang.speechCode);
-    if (monitorRef.current) monitorRef.current.setLang(toLang.speechCode);
+    if (monitorRef.current) monitorRef.current.setLang(fromLang.speechCode);
   }, [fromLang, toLang]);
 
+  // ─── Monitor toggle ──────────────────────────────────────────
   const handleMonitorToggle = useCallback(
     (checked: boolean) => {
       haptic();
@@ -209,17 +255,15 @@ const Index = () => {
                 interimTranslation: "",
               });
 
-              // Deferred translation — only on isFinal
               translateText(text.trim(), toLangRef.current.name, fromLangRef.current.name)
                 .then((segmentTranslation) => {
                   activeTranslatedRef.current = (activeTranslatedRef.current + " " + segmentTranslation).trim();
                   setActiveMessage((prev) =>
-                    prev ? { ...prev, translated: activeTranslatedRef.current, interimTranslation: "" } : null
+                    prev ? { ...prev, translated: activeTranslatedRef.current } : null
                   );
                 })
                 .catch(() => {});
             } else {
-              // Instant ghost text for interim
               const currentFinal = activeFinalRef.current.trim();
               setActiveMessage({
                 original: currentFinal,
@@ -244,7 +288,7 @@ const Index = () => {
         monitorRef.current = null;
       }
     },
-    [fromLang, toLang, finalizeActiveBlock]
+    [toLang, finalizeActiveBlock]
   );
 
   return (
@@ -256,7 +300,6 @@ const Index = () => {
       <header className="flex items-center justify-between px-5 py-3 border-b border-border/40 bg-card/60 backdrop-blur-xl">
         <h1 className="text-base font-semibold text-foreground tracking-tight">Translator</h1>
         <div className="flex items-center gap-3">
-          {/* Palette dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -295,7 +338,7 @@ const Index = () => {
         </div>
       </header>
 
-      {/* Guide card — ABOVE conversation */}
+      {/* Guide card */}
       <div className="px-5 py-2">
         <div className="rounded-2xl px-4 py-3 text-[11px] leading-relaxed text-muted-foreground bg-card/40 backdrop-blur-md border border-border/30">
           <span className="font-semibold text-foreground/70">Incoming:</span> Enable Monitor to translate the other party. Turn off after the session.{" "}
@@ -303,8 +346,13 @@ const Index = () => {
         </div>
       </div>
 
-      {/* Monitor (conversation area) */}
-      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
+      {/* Conversation area — universal for both Monitor & Console */}
+      <MonitorSection
+        entries={entries}
+        isMonitoring={isMonitoring}
+        activeMessage={activeMessage}
+        activeConsoleMessage={activeConsoleMessage}
+      />
 
       {/* Console (bottom) */}
       <ConsoleSection
