@@ -188,15 +188,20 @@ const Index = () => {
   const handlePlay = useCallback(async () => {
     if (!translationText) return;
     haptic();
+    if (isPlaying) {
+      await playTranslation(translationText);
+      setIsPlaying(false);
+      return;
+    }
     setIsPlaying(true);
     try {
-      await playTranslation(translationText);
+      const started = await playTranslation(translationText, () => setIsPlaying(false));
+      if (!started) setIsPlaying(false);
     } catch (e: any) {
       toast({ variant: "destructive", title: "Playback error", description: e.message });
-    } finally {
       setIsPlaying(false);
     }
-  }, [translationText]);
+  }, [translationText, isPlaying]);
 
   const handleClear = useCallback(() => {
     haptic();
