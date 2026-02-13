@@ -5,14 +5,11 @@ import type { Language } from "@/lib/languages";
 interface ConsoleSectionProps {
   speechText: string;
   translationText: string;
-  translationSegments?: string[];
-  speechSegments?: string[];
   isRecording: boolean;
   isPlaying: boolean;
   isTranslating: boolean;
   fromLang: Language;
   toLang: Language;
-  isVcMode?: boolean;
   onSpeechChange: (text: string) => void;
   onRecord: () => void;
   onPlay: () => void;
@@ -25,14 +22,11 @@ interface ConsoleSectionProps {
 export function ConsoleSection({
   speechText,
   translationText,
-  translationSegments = [],
-  speechSegments = [],
   isRecording,
   isPlaying,
   isTranslating,
   fromLang,
   toLang,
-  isVcMode = false,
   onSpeechChange,
   onRecord,
   onPlay,
@@ -41,12 +35,6 @@ export function ConsoleSection({
   onToChange,
   onSwapLangs,
 }: ConsoleSectionProps) {
-  const showTranslationSegments = isVcMode && translationSegments.length > 0;
-  const displayTranslation = showTranslationSegments
-    ? translationSegments.join("\n")
-    : translationText;
-  const showSpeechSegments = isVcMode && speechSegments.length > 0;
-
   return (
     <div className="flex flex-col gap-3 px-5 pt-4 pb-6 bg-background">
       {/* My Speech */}
@@ -54,68 +42,35 @@ export function ConsoleSection({
         <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
           My Speech
         </label>
-        <div className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] max-h-24 overflow-y-auto">
-          {showSpeechSegments || speechText ? (
-            <div className="flex flex-col gap-1">
-              {speechSegments.map((seg, i) => (
-                <p
-                  key={`s-${i}`}
-                  className="transition-opacity duration-500"
-                  style={{ opacity: speechText ? 0.35 : (i === speechSegments.length - 1 ? 1 : 0.35) }}
-                >
-                  {seg}
-                </p>
-              ))}
-              {speechText && <p>{speechText}</p>}
-            </div>
-          ) : (
-            <p className="text-muted-foreground">Tap the mic to start speaking...</p>
-          )}
-        </div>
+        <textarea
+          value={speechText}
+          onChange={(e) => onSpeechChange(e.target.value)}
+          placeholder="Tap the mic to start speaking..."
+          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
+        />
       </div>
 
       {/* Translation */}
       <div>
-        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
+        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
           Translation {isTranslating && <span className="text-primary">• translating...</span>}
         </label>
-        <div className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground min-h-[4rem] max-h-24 overflow-y-auto">
-          {showTranslationSegments ? (
-            <div className="flex flex-col gap-1">
-              {translationSegments.map((seg, i) => (
-                <p
-                  key={i}
-                  className="transition-opacity duration-300"
-                  style={{ opacity: i === translationSegments.length - 1 ? 1 : 0.5 }}
-                >
-                  {seg}
-                </p>
-              ))}
-            </div>
-          ) : (
-            <p className={displayTranslation ? "" : "text-muted-foreground"}>
-              {displayTranslation || "Translation will appear here"}
-            </p>
-          )}
-        </div>
+        <textarea
+          value={translationText}
+          readOnly
+          placeholder="Translation will appear here"
+          className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring h-16"
+        />
       </div>
 
-      {/* Language Picker — hidden in VC mode, replaced with auto badge */}
-      {isVcMode ? (
-        <div className="flex items-center justify-center py-1.5">
-          <span className="text-sm font-medium text-muted-foreground bg-muted px-4 py-1.5 rounded-full">
-            🇨🇳 中 ↔ EN 🇬🇧 · Auto Detect
-          </span>
-        </div>
-      ) : (
-        <LanguagePicker
-          from={fromLang}
-          to={toLang}
-          onFromChange={onFromChange}
-          onToChange={onToChange}
-          onSwap={onSwapLangs}
-        />
-      )}
+      {/* Language Picker */}
+      <LanguagePicker
+        from={fromLang}
+        to={toLang}
+        onFromChange={onFromChange}
+        onToChange={onToChange}
+        onSwap={onSwapLangs}
+      />
 
       {/* Action Buttons */}
       <div className="flex items-center justify-center gap-8">
@@ -149,7 +104,7 @@ export function ConsoleSection({
         {/* Play */}
         <button
           onClick={onPlay}
-          disabled={!displayTranslation || isPlaying}
+          disabled={!translationText || isPlaying}
           className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Play translation"
         >

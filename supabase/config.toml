@@ -5,6 +5,3 @@ verify_jwt = false
 
 [functions.refine-translation]
 verify_jwt = false
-
-[functions.volcengine-proxy]
-verify_jwt = false
