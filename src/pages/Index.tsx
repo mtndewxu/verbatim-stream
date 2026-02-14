@@ -368,7 +368,7 @@ function Index() {
                     if (seqId === monitorTranslationSeq.current) {
                       activeTranslatedRef.current = result;
                       setActiveMessage((prev) =>
-                        prev ? { ...prev, translated: result, interimTranslation: "" } : null
+                        prev ? { ...prev, translated: result } : null
                       );
                     }
                   })
@@ -393,11 +393,12 @@ function Index() {
                 targetFlag: fromLangRef.current.flag,
               }));
 
-              // 2. Throttled interim translation
+              // 2. Throttled interim translation (fire immediately on first, then throttle)
               const now = Date.now();
               const timeElapsed = now - lastTranslationTimeRef.current;
-              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 6;
-              const shouldTranslate = (timeElapsed > 600 || textGrew) && fullInterimText.length > 3;
+              const isFirst = lastTranslationTimeRef.current === 0;
+              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 3;
+              const shouldTranslate = (isFirst || timeElapsed > 400 || textGrew) && fullInterimText.length > 1;
 
               if (shouldTranslate) {
                 lastTranslationTimeRef.current = now;
