@@ -140,14 +140,14 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
               <p className="text-sm leading-relaxed">
                 <span className="text-foreground">{activeMessage.sourceFlag} {activeMessage.original}</span>
                 {activeMessage.interimSuffix && (
-                  <span className="text-muted-foreground/50">{activeMessage.interimSuffix}</span>
+                  <span className="text-muted-foreground/50 italic opacity-50 transition-opacity duration-300">{activeMessage.interimSuffix}</span>
                 )}
               </p>
               {(activeMessage.translated || activeMessage.interimTranslation) && (
                 <p className="text-sm leading-relaxed mt-1">
-                  <span className="font-semibold text-primary">→ {activeMessage.targetFlag} {activeMessage.translated}</span>
+                  <span className="font-semibold text-primary transition-all duration-500 ease-in-out">→ {activeMessage.targetFlag} {activeMessage.translated}</span>
                   {activeMessage.interimTranslation && (
-                    <span className="text-primary/40 italic"> {activeMessage.interimTranslation}</span>
+                    <span className="text-primary/40 italic opacity-50 transition-opacity duration-300"> {activeMessage.interimTranslation}</span>
                   )}
                 </p>
               )}
