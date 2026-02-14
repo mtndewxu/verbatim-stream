@@ -3,7 +3,8 @@ const REFINE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-tra
 export async function refineTranslations(
   sentences: string[],
   fromLang: string,
-  toLang: string
+  toLang: string,
+  previousContext?: string
 ): Promise<string[]> {
   const resp = await fetch(REFINE_URL, {
     method: "POST",
@@ -11,7 +12,7 @@ export async function refineTranslations(
       "Content-Type": "application/json",
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
-    body: JSON.stringify({ sentences, fromLang, toLang }),
+    body: JSON.stringify({ sentences, fromLang, toLang, previousContext }),
   });
 
   if (!resp.ok) {
