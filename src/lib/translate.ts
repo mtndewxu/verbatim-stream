@@ -3,7 +3,8 @@ const TRANSLATE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/transla
 export async function translateText(
   text: string,
   fromLang: string,
-  toLang: string
+  toLang: string,
+  signal?: AbortSignal
 ): Promise<string> {
   const resp = await fetch(TRANSLATE_URL, {
     method: "POST",
@@ -12,6 +13,7 @@ export async function translateText(
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
     body: JSON.stringify({ text, fromLang, toLang }),
+    signal,
   });
 
   if (!resp.ok) {
