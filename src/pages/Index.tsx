@@ -9,7 +9,7 @@ import { getLanguage, type Language } from "@/lib/languages";
 import { playTranslation } from "@/lib/tts";
 import { toast } from "@/hooks/use-toast";
 
-const Index = () => {
+function Index() {
   const [fromLang, setFromLang] = useState<Language>(getLanguage("zh"));
   const [toLang, setToLang] = useState<Language>(getLanguage("en"));
   const [speechText, setSpeechText] = useState("");
