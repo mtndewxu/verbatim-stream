@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Switch } from "@/components/ui/switch";
 import { MonitorSection, type ConversationEntry, type ActiveMessage } from "@/components/MonitorSection";
 import { ConsoleSection } from "@/components/ConsoleSection";
 import { DeepgramTranscriber } from "@/lib/deepgram";
@@ -403,12 +402,6 @@ function Index() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-card">
         <h1 className="text-base font-semibold text-foreground tracking-tight">Translator</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Monitor
-          </span>
-          <Switch checked={isMonitoring} onCheckedChange={handleMonitorToggle} />
-        </div>
       </header>
 
       {/* Guide */}
@@ -421,7 +414,7 @@ function Index() {
       </div>
 
       {/* Monitor (top ~60%) */}
-      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} isMicReady={isMicReady} />
+      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} isMicReady={isMicReady} onMonitorToggle={handleMonitorToggle} />
 
       {/* Console (bottom ~40%) */}
       <ConsoleSection
