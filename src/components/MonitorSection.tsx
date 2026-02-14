@@ -25,6 +25,7 @@ interface MonitorSectionProps {
   entries: ConversationEntry[];
   isMonitoring: boolean;
   activeMessage?: ActiveMessage | null;
+  isMicReady: boolean;
 }
 
 function AudioWaveVisualizer() {
@@ -49,7 +50,7 @@ function AudioWaveVisualizer() {
   );
 }
 
-export function MonitorSection({ entries, isMonitoring, activeMessage }: MonitorSectionProps) {
+export function MonitorSection({ entries, isMonitoring, activeMessage, isMicReady }: MonitorSectionProps) {
   const scrollAnchor = useRef<HTMLDivElement>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
@@ -82,11 +83,22 @@ export function MonitorSection({ entries, isMonitoring, activeMessage }: Monitor
         </h2>
         {isMonitoring && (
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
-            <span className="text-[10px] font-medium text-destructive uppercase tracking-wider">
-              Live
-            </span>
-            <AudioWaveVisualizer />
+            {isMicReady ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+                <span className="text-[10px] font-medium text-destructive uppercase tracking-wider">
+                  Live
+                </span>
+                <AudioWaveVisualizer />
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                <span className="text-[10px] font-medium text-yellow-500 uppercase tracking-wider">
+                  Connecting...
+                </span>
+              </>
+            )}
           </div>
         )}
       </div>

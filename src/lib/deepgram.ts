@@ -36,7 +36,8 @@ export class DeepgramTranscriber {
     private lang: string,
     private onResult: TranscriptCallback,
     private onEnd?: () => void,
-    private onError?: (error: string) => void
+    private onError?: (error: string) => void,
+    private onReady?: () => void
   ) {}
 
   setLang(lang: string) {
@@ -127,6 +128,9 @@ export class DeepgramTranscriber {
         }
         this.preConnectBuffer = [];
       }
+
+      // Signal that the mic pipeline is fully open
+      this.onReady?.();
     };
 
     this.ws.onmessage = (event) => {
