@@ -245,8 +245,8 @@ function Index() {
             // Throttled interim translation for console
             const now = Date.now();
             const timeElapsed = now - lastConsoleTranslationTimeRef.current;
-            const textGrew = Math.abs(fullInterim.length - lastConsoleInterimTextLengthRef.current) > 10;
-            const shouldTranslate = (timeElapsed > 1000 || textGrew) && fullInterim.length > 5;
+            const textGrew = Math.abs(fullInterim.length - lastConsoleInterimTextLengthRef.current) > 6;
+            const shouldTranslate = (timeElapsed > 600 || textGrew) && fullInterim.length > 3;
 
             if (shouldTranslate) {
               lastConsoleTranslationTimeRef.current = now;
@@ -346,14 +346,14 @@ function Index() {
               const finalSoFar = activeFinalRef.current.trim();
 
               // Update active message immediately with original text + flag
-              setActiveMessage({
+              setActiveMessage((prev) => ({
                 original: finalSoFar,
                 interimSuffix: "",
-                translated: activeTranslatedRef.current,
-                interimTranslation: "",
+                translated: activeTranslatedRef.current || prev?.translated || "",
+                interimTranslation: prev?.interimTranslation || "",
                 sourceFlag: toLangRef.current.flag,
                 targetFlag: fromLangRef.current.flag,
-              });
+              }));
 
               // Full-context re-translation: translate entire accumulated text
               const fullText = activeFinalRef.current.trim();
@@ -394,8 +394,8 @@ function Index() {
               // 2. Throttled interim translation
               const now = Date.now();
               const timeElapsed = now - lastTranslationTimeRef.current;
-              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 10;
-              const shouldTranslate = (timeElapsed > 1000 || textGrew) && fullInterimText.length > 5;
+              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 6;
+              const shouldTranslate = (timeElapsed > 600 || textGrew) && fullInterimText.length > 3;
 
               if (shouldTranslate) {
                 lastTranslationTimeRef.current = now;
