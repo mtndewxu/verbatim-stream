@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
 import { playTranslation } from "@/lib/tts";
+import { Switch } from "@/components/ui/switch";
 
 export interface ConversationEntry {
   id: string;
@@ -26,6 +27,7 @@ interface MonitorSectionProps {
   isMonitoring: boolean;
   activeMessage?: ActiveMessage | null;
   isMicReady: boolean;
+  onMonitorToggle: (checked: boolean) => void;
 }
 
 function AudioWaveVisualizer() {
@@ -50,7 +52,7 @@ function AudioWaveVisualizer() {
   );
 }
 
-export function MonitorSection({ entries, isMonitoring, activeMessage, isMicReady }: MonitorSectionProps) {
+export function MonitorSection({ entries, isMonitoring, activeMessage, isMicReady, onMonitorToggle }: MonitorSectionProps) {
   const scrollAnchor = useRef<HTMLDivElement>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
@@ -81,26 +83,32 @@ export function MonitorSection({ entries, isMonitoring, activeMessage, isMicRead
         <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Conversation
         </h2>
-        {isMonitoring && (
-          <div className="flex items-center gap-1.5">
-            {isMicReady ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
-                <span className="text-[10px] font-medium text-destructive uppercase tracking-wider">
-                  Live
-                </span>
-                <AudioWaveVisualizer />
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                <span className="text-[10px] font-medium text-yellow-500 uppercase tracking-wider">
-                  Connecting...
-                </span>
-              </>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {isMonitoring && (
+            <div className="flex items-center gap-1.5">
+              {isMicReady ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+                  <span className="text-[10px] font-medium text-destructive uppercase tracking-wider">
+                    Live
+                  </span>
+                  <AudioWaveVisualizer />
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                  <span className="text-[10px] font-medium text-yellow-500 uppercase tracking-wider">
+                    Connecting...
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Monitor
+          </span>
+          <Switch checked={isMonitoring} onCheckedChange={onMonitorToggle} />
+        </div>
       </div>
 
       {/* Messages — bordered container matching textareas */}
