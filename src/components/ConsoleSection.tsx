@@ -1,4 +1,4 @@
-import { Mic, Volume2, Trash2 } from "lucide-react";
+import { Mic, Volume2, Trash2, Loader2 } from "lucide-react";
 import { LanguagePicker } from "./LanguagePicker";
 import type { Language } from "@/lib/languages";
 
@@ -17,6 +17,7 @@ interface ConsoleSectionProps {
   onFromChange: (lang: Language) => void;
   onToChange: (lang: Language) => void;
   onSwapLangs: () => void;
+  isMicReady: boolean;
 }
 
 export function ConsoleSection({
@@ -34,6 +35,7 @@ export function ConsoleSection({
   onFromChange,
   onToChange,
   onSwapLangs,
+  isMicReady,
 }: ConsoleSectionProps) {
   return (
     <div className="flex flex-col gap-3 px-5 pt-4 pb-6 bg-background">
@@ -85,19 +87,25 @@ export function ConsoleSection({
 
         {/* Record */}
         <div className="relative">
-          {isRecording && (
+          {isRecording && isMicReady && (
             <span className="absolute inset-0 rounded-full bg-destructive/30 animate-pulse-ring" />
           )}
           <button
             onClick={onRecord}
             className={`relative z-10 w-16 h-16 rounded-full flex items-center justify-center transition-all active:scale-95 ${
               isRecording
-                ? "bg-destructive text-destructive-foreground shadow-lg"
+                ? isMicReady
+                  ? "bg-destructive text-destructive-foreground shadow-lg"
+                  : "bg-yellow-500 text-white shadow-lg"
                 : "bg-primary text-primary-foreground shadow-md"
             }`}
             aria-label={isRecording ? "Stop recording" : "Start recording"}
           >
-            <Mic className="w-7 h-7" />
+            {isRecording && !isMicReady ? (
+              <Loader2 className="w-7 h-7 animate-spin" />
+            ) : (
+              <Mic className="w-7 h-7" />
+            )}
           </button>
         </div>
 

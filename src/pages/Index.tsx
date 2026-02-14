@@ -19,6 +19,7 @@ function Index() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [isMicReady, setIsMicReady] = useState(false);
 
   // Active message state for continuous merging — single block per session
   const [activeMessage, setActiveMessage] = useState<ActiveMessage | null>(null);
@@ -148,6 +149,7 @@ function Index() {
       // Stop recording
       isRecordingRef.current = false;
       setIsRecording(false);
+      setIsMicReady(false);
 
       // Graceful stop to capture remaining finals
       const rec = recorderRef.current;
@@ -185,6 +187,7 @@ function Index() {
       }
     } else {
       // Start recording
+      setIsMicReady(false);
       consoleFinalRef.current = "";
       consoleTranslatedRef.current = "";
       pendingConsoleTranslations.current = 0;
@@ -237,7 +240,8 @@ function Index() {
           toast({ variant: "destructive", title: "Mic error", description: error });
           isRecordingRef.current = false;
           setIsRecording(false);
-        }
+        },
+        () => setIsMicReady(true)
       );
 
       recorderRef.current = rec;
@@ -287,6 +291,7 @@ function Index() {
       setIsMonitoring(checked);
       if (checked) {
         // Start fresh — single active block for entire session
+        setIsMicReady(false);
         activeFinalRef.current = "";
         activeTranslatedRef.current = "";
         pendingMonitorTranslations.current = 0;
@@ -350,12 +355,16 @@ function Index() {
           (error) => {
             toast({ variant: "destructive", title: "Monitor error", description: error });
             setIsMonitoring(false);
-          }
+          },
+          () => setIsMicReady(true)
         );
 
         monitorRef.current = monitor;
         monitor.start();
       } else {
+        // Stopping
+        setIsMicReady(false);
+
         // Graceful stop — wait for Deepgram to flush remaining finals
         const monitor = monitorRef.current;
         monitorRef.current = null;
@@ -412,7 +421,7 @@ function Index() {
       </div>
 
       {/* Monitor (top ~60%) */}
-      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} />
+      <MonitorSection entries={entries} isMonitoring={isMonitoring} activeMessage={activeMessage} isMicReady={isMicReady} />
 
       {/* Console (bottom ~40%) */}
       <ConsoleSection
@@ -430,6 +439,7 @@ function Index() {
         onFromChange={setFromLang}
         onToChange={setToLang}
         onSwapLangs={handleSwapLangs}
+        isMicReady={isMicReady}
       />
     </div>
   );
