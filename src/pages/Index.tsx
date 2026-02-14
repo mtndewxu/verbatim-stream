@@ -41,6 +41,12 @@ function Index() {
   const monitorTranslationSeq = useRef(0);
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
+
+  // Throttle refs for interim translations
+  const lastTranslationTimeRef = useRef<number>(0);
+  const lastInterimTextLengthRef = useRef<number>(0);
+  const lastConsoleTranslationTimeRef = useRef<number>(0);
+  const lastConsoleInterimTextLengthRef = useRef<number>(0);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
   // Rolling refinement refs
@@ -194,6 +200,8 @@ function Index() {
       consoleTranslatedRef.current = "";
       pendingConsoleTranslations.current = 0;
       consoleTranslationSeq.current = 0;
+      lastConsoleTranslationTimeRef.current = 0;
+      lastConsoleInterimTextLengthRef.current = 0;
       finalTextRef.current = "";
       setSpeechText("");
       setTranslationText("");
@@ -231,7 +239,34 @@ function Index() {
             }
           } else {
             // Interim: show partial text immediately
-            setSpeechText((finalTextRef.current + text).trim());
+            const fullInterim = (finalTextRef.current + text).trim();
+            setSpeechText(fullInterim);
+
+            // Throttled interim translation for console
+            const now = Date.now();
+            const timeElapsed = now - lastConsoleTranslationTimeRef.current;
+            const textGrew = Math.abs(fullInterim.length - lastConsoleInterimTextLengthRef.current) > 10;
+            const shouldTranslate = (timeElapsed > 1000 || textGrew) && fullInterim.length > 5;
+
+            if (shouldTranslate) {
+              lastConsoleTranslationTimeRef.current = now;
+              lastConsoleInterimTextLengthRef.current = fullInterim.length;
+
+              const seqId = ++consoleTranslationSeq.current;
+              pendingConsoleTranslations.current++;
+              setIsTranslating(true);
+              translateText(fullInterim, fromLangRef.current.name, toLangRef.current.name)
+                .then((result) => {
+                  if (seqId === consoleTranslationSeq.current) {
+                    setTranslationText(result);
+                  }
+                })
+                .catch(() => {})
+                .finally(() => {
+                  pendingConsoleTranslations.current--;
+                  if (pendingConsoleTranslations.current <= 0) setIsTranslating(false);
+                });
+            }
           }
         },
         () => {
@@ -298,6 +333,8 @@ function Index() {
         activeTranslatedRef.current = "";
         pendingMonitorTranslations.current = 0;
         monitorTranslationSeq.current = 0;
+        lastTranslationTimeRef.current = 0;
+        lastInterimTextLengthRef.current = 0;
         setActiveMessage(null);
 
         const monitor = new DeepgramTranscriber(
@@ -342,15 +379,43 @@ function Index() {
               // Interim: show partial text immediately with flag
               const currentFinal = activeFinalRef.current.trim();
               const interimSuffix = " " + text;
+              const fullInterimText = (currentFinal + interimSuffix).trim();
 
-              setActiveMessage({
+              // 1. Update UI immediately with the raw text
+              setActiveMessage((prev) => ({
                 original: currentFinal,
                 interimSuffix,
-                translated: activeTranslatedRef.current,
-                interimTranslation: "",
+                translated: prev?.translated || activeTranslatedRef.current,
+                interimTranslation: prev?.interimTranslation || "",
                 sourceFlag: toLangRef.current.flag,
                 targetFlag: fromLangRef.current.flag,
-              });
+              }));
+
+              // 2. Throttled interim translation
+              const now = Date.now();
+              const timeElapsed = now - lastTranslationTimeRef.current;
+              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 10;
+              const shouldTranslate = (timeElapsed > 1000 || textGrew) && fullInterimText.length > 5;
+
+              if (shouldTranslate) {
+                lastTranslationTimeRef.current = now;
+                lastInterimTextLengthRef.current = fullInterimText.length;
+
+                const seqId = ++monitorTranslationSeq.current;
+                pendingMonitorTranslations.current++;
+                translateText(fullInterimText, toLangRef.current.name, fromLangRef.current.name)
+                  .then((result) => {
+                    if (seqId === monitorTranslationSeq.current) {
+                      setActiveMessage((prev) =>
+                        prev ? { ...prev, interimTranslation: result } : null
+                      );
+                    }
+                  })
+                  .catch(() => {})
+                  .finally(() => {
+                    pendingMonitorTranslations.current--;
+                  });
+              }
             }
           },
           undefined,
