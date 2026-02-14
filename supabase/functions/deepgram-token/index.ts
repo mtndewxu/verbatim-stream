@@ -29,7 +29,7 @@ serve(async (req) => {
     // Return the key directly — temp key creation requires keys:write scope
     // which this API key doesn't have. The key is gated behind auth above.
     return new Response(
-      JSON.stringify({ key: DEEPGRAM_API_KEY }),
+      JSON.stringify({ key: DEEPGRAM_API_KEY.trim() }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {

@@ -17,7 +17,7 @@ async function getDeepgramKey(): Promise<string> {
   if (!resp.ok) throw new Error("Failed to get Deepgram token");
   const data = await resp.json();
   console.log("[Deepgram] Temporary API key obtained ✓");
-  return data.key;
+  return data.key.trim();
 }
 
 export class DeepgramTranscriber {
