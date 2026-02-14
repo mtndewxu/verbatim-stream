@@ -57,18 +57,27 @@ export class DeepgramTranscriber {
     console.log("[Deepgram] Starting transcriber, lang:", this.lang);
 
     try {
-      if (!this.mediaStream) {
-        console.log("[Deepgram] Requesting microphone access…");
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true },
-        });
-        console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
-      }
+      // Run mic acquisition and token fetch in parallel to reduce waterfall delay
+      const [stream, key] = await Promise.all([
+        this.mediaStream
+          ? Promise.resolve(this.mediaStream)
+          : (async () => {
+              console.log("[Deepgram] Requesting microphone access…");
+              const s = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true },
+              });
+              console.log("[Deepgram] Microphone acquired, tracks:", s.getAudioTracks().length);
+              return s;
+            })(),
+        getDeepgramKey(),
+      ]);
 
-      // Start audio pipeline FIRST so audio is buffered during WS handshake
+      this.mediaStream = stream;
+
+      // Start audio pipeline so audio is buffered during WS handshake
       await this.setupAudioWorklet();
-      // WS connects in parallel; buffered audio flushed on open
-      await this.connectWebSocket();
+      // Connect WS with the already-fetched key; buffered audio flushed on open
+      await this.connectWebSocket(key);
     } catch (e: any) {
       console.error("[Deepgram] Start error:", e);
       this.running = false;
@@ -101,8 +110,8 @@ export class DeepgramTranscriber {
     console.log("[Deepgram] AudioWorklet pipeline ready (linear16, 16kHz)");
   }
 
-  private async connectWebSocket() {
-    const key = await getDeepgramKey();
+  private async connectWebSocket(key?: string) {
+    if (!key) key = await getDeepgramKey();
     const dgLang = this.mapLang(this.lang);
 
     // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
