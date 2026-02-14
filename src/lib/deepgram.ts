@@ -115,7 +115,7 @@ export class DeepgramTranscriber {
     const dgLang = this.mapLang(this.lang);
 
     // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
-    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
+    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
 
     console.log("[Deepgram] Opening WebSocket:", wsUrl);
 
