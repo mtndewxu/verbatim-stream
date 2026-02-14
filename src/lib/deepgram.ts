@@ -4,9 +4,8 @@ const TOKEN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepgram-to
 
 type TranscriptCallback = (text: string, isFinal: boolean) => void;
 
-export type ConnectionState = "idle" | "connecting" | "open" | "closing" | "closed";
-
 async function getDeepgramKey(): Promise<string> {
+  // Always fetch a fresh temporary key (TTL 60s from edge function)
   console.log("[Deepgram] Fetching temporary API key from edge function…");
   const resp = await fetch(TOKEN_URL, {
     headers: {
@@ -17,7 +16,7 @@ async function getDeepgramKey(): Promise<string> {
   if (!resp.ok) throw new Error("Failed to get Deepgram token");
   const data = await resp.json();
   console.log("[Deepgram] Temporary API key obtained ✓");
-  return data.key.trim();
+  return data.key;
 }
 
 export class DeepgramTranscriber {
@@ -32,28 +31,13 @@ export class DeepgramTranscriber {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retryToastShown = false;
   private preConnectBuffer: ArrayBuffer[] = [];
-  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
-  private _connectionState: ConnectionState = "idle";
-  private onConnectionStateChange?: (state: ConnectionState) => void;
 
   constructor(
     private lang: string,
     private onResult: TranscriptCallback,
     private onEnd?: () => void,
-    private onError?: (error: string) => void,
-    onConnectionStateChange?: (state: ConnectionState) => void
-  ) {
-    this.onConnectionStateChange = onConnectionStateChange;
-  }
-
-  get connectionState(): ConnectionState {
-    return this._connectionState;
-  }
-
-  private setConnectionState(state: ConnectionState) {
-    this._connectionState = state;
-    this.onConnectionStateChange?.(state);
-  }
+    private onError?: (error: string) => void
+  ) {}
 
   setLang(lang: string) {
     this.lang = lang;
@@ -69,7 +53,6 @@ export class DeepgramTranscriber {
     this.reconnectAttempts = 0;
     this.retryToastShown = false;
     this.preConnectBuffer = [];
-    this.setConnectionState("connecting");
     console.log("[Deepgram] Starting transcriber, lang:", this.lang);
 
     try {
@@ -81,19 +64,13 @@ export class DeepgramTranscriber {
         console.log("[Deepgram] Microphone acquired, tracks:", this.mediaStream.getAudioTracks().length);
       }
 
+      // Start audio pipeline FIRST so audio is buffered during WS handshake
       await this.setupAudioWorklet();
-
-      // Ensure AudioContext is active (browser may suspend it)
-      if (this.audioCtx && this.audioCtx.state === "suspended") {
-        console.log("[Deepgram] Resuming suspended AudioContext…");
-        await this.audioCtx.resume();
-      }
-
+      // WS connects in parallel; buffered audio flushed on open
       await this.connectWebSocket();
     } catch (e: any) {
       console.error("[Deepgram] Start error:", e);
       this.running = false;
-      this.setConnectionState("closed");
       this.onError?.(e.message || "Failed to start transcription");
     }
   }
@@ -113,6 +90,7 @@ export class DeepgramTranscriber {
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(event.data);
       } else {
+        // Buffer audio while WebSocket is still connecting
         this.preConnectBuffer.push(event.data as ArrayBuffer);
       }
     };
@@ -122,30 +100,17 @@ export class DeepgramTranscriber {
     console.log("[Deepgram] AudioWorklet pipeline ready (linear16, 16kHz)");
   }
 
-  private startKeepAlive() {
-    this.stopKeepAlive();
-    this.keepAliveTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "KeepAlive" }));
-      }
-    }, 5000);
-  }
-
-  private stopKeepAlive() {
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = null;
-    }
-  }
-
   private async connectWebSocket() {
     const key = await getDeepgramKey();
     const dgLang = this.mapLang(this.lang);
 
+    // Critical: encoding & sample_rate must match AudioWorklet output (linear16 PCM, 16kHz)
     const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&language=${dgLang}&smart_format=true&encoding=linear16&sample_rate=16000&punctuate=true&interim_results=true&endpointing=300`;
 
     console.log("[Deepgram] Opening WebSocket:", wsUrl);
 
+    // Browser WebSockets can't set custom headers, so use Sec-WebSocket-Protocol
+    // to pass auth: ["token", "<key>"] — Deepgram's recommended browser method
     this.ws = new WebSocket(wsUrl, ["token", key]);
     this.ws.binaryType = "arraybuffer";
 
@@ -153,11 +118,8 @@ export class DeepgramTranscriber {
       console.log("[Deepgram] WebSocket connected ✓ (attempt", this.reconnectAttempts, ")");
       this.reconnectAttempts = 0;
       this.retryToastShown = false;
-      this.setConnectionState("open");
 
-      // Start KeepAlive heartbeat
-      this.startKeepAlive();
-
+      // Flush any audio buffered during the handshake
       if (this.preConnectBuffer.length > 0) {
         console.log(`[Deepgram] Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
         for (const chunk of this.preConnectBuffer) {
@@ -191,12 +153,9 @@ export class DeepgramTranscriber {
 
     this.ws.onclose = (event) => {
       console.log(`[Deepgram] WebSocket closed — code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean}`);
-      this.stopKeepAlive();
       if (this.running) {
-        this.setConnectionState("connecting");
         this.scheduleReconnect();
       } else {
-        this.setConnectionState("closed");
         this.onEnd?.();
       }
     };
@@ -207,11 +166,11 @@ export class DeepgramTranscriber {
       console.error(`[Deepgram] Max reconnect attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached — stopping`);
       this.onError?.("Deepgram connection lost after multiple retries");
       this.running = false;
-      this.setConnectionState("closed");
       this.onEnd?.();
       return;
     }
 
+    // Show toast once when retrying begins
     if (!this.retryToastShown) {
       this.retryToastShown = true;
       toast({ title: "Connection retrying…", description: "Deepgram WebSocket reconnecting" });
@@ -221,6 +180,7 @@ export class DeepgramTranscriber {
     this.reconnectAttempts++;
     console.log(`[Deepgram] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})…`);
 
+    // Fresh key will be fetched on each reconnect (temp keys are short-lived)
     this.reconnectTimer = setTimeout(async () => {
       if (!this.running) return;
       try {
@@ -241,7 +201,6 @@ export class DeepgramTranscriber {
   stop() {
     console.log("[Deepgram] Stopping transcriber");
     this.running = false;
-    this.stopKeepAlive();
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -264,22 +223,24 @@ export class DeepgramTranscriber {
       this.ws.close();
     }
     this.ws = null;
-    this.setConnectionState("closed");
     console.log("[Deepgram] Transcriber stopped ✓");
   }
 
+  /**
+   * Graceful stop: stops audio input, sends CloseStream, and waits for
+   * Deepgram to flush remaining finals before resolving.
+   */
   stopGracefully(timeoutMs = 3000): Promise<void> {
     return new Promise<void>((resolve) => {
       console.log("[Deepgram] Graceful stop initiated…");
       this.running = false;
-      this.stopKeepAlive();
-      this.setConnectionState("closing");
 
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
 
+      // Stop audio input but keep WS open to receive remaining finals
       this.workletNode?.disconnect();
       this.workletNode = null;
 
@@ -293,30 +254,31 @@ export class DeepgramTranscriber {
 
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         this.ws = null;
-        this.setConnectionState("closed");
         console.log("[Deepgram] No open WS, resolving immediately");
         resolve();
         return;
       }
 
+      // Timeout safety net
       const timer = setTimeout(() => {
         console.log("[Deepgram] Graceful stop timed out, forcing close");
         this.ws?.close();
         this.ws = null;
-        this.setConnectionState("closed");
         resolve();
       }, timeoutMs);
 
+      // Listen for WS close (Deepgram closes after flushing finals)
       const origOnClose = this.ws.onclose;
       this.ws.onclose = (event) => {
         clearTimeout(timer);
         console.log("[Deepgram] WS closed gracefully after flush");
+        // Still fire original handler for any remaining messages
         if (origOnClose) origOnClose.call(this.ws, event);
         this.ws = null;
-        this.setConnectionState("closed");
         resolve();
       };
 
+      // Send CloseStream to tell Deepgram to flush remaining audio
       this.ws.send(JSON.stringify({ type: "CloseStream" }));
     });
   }

@@ -1,14 +1,9 @@
 const TRANSLATE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/translate`;
 
-/**
- * Translate text with optional AbortSignal support.
- * Pass a signal from AbortController to cancel stale requests.
- */
 export async function translateText(
   text: string,
   fromLang: string,
-  toLang: string,
-  signal?: AbortSignal
+  toLang: string
 ): Promise<string> {
   const resp = await fetch(TRANSLATE_URL, {
     method: "POST",
@@ -17,7 +12,6 @@ export async function translateText(
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
     body: JSON.stringify({ text, fromLang, toLang }),
-    signal,
   });
 
   if (!resp.ok) {
