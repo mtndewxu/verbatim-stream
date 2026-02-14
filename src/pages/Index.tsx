@@ -246,8 +246,8 @@ function Index() {
             // Throttled interim translation for console
             const now = Date.now();
             const timeElapsed = now - lastConsoleTranslationTimeRef.current;
-            const textGrew = Math.abs(fullInterim.length - lastConsoleInterimTextLengthRef.current) > 3;
-            const shouldTranslate = (timeElapsed > 300 || textGrew) && fullInterim.length > 2;
+            const textGrew = Math.abs(fullInterim.length - lastConsoleInterimTextLengthRef.current) > 6;
+            const shouldTranslate = (timeElapsed > 600 || textGrew) && fullInterim.length > 3;
 
             if (shouldTranslate) {
               lastConsoleTranslationTimeRef.current = now;
@@ -393,12 +393,11 @@ function Index() {
                 targetFlag: fromLangRef.current.flag,
               }));
 
-              // 2. Aggressive interim translation — results go directly into `translated`
-              //    so subtitles scroll in real-time alongside transcription
+              // 2. Throttled interim translation
               const now = Date.now();
               const timeElapsed = now - lastTranslationTimeRef.current;
-              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 3;
-              const shouldTranslate = (timeElapsed > 300 || textGrew) && fullInterimText.length > 2;
+              const textGrew = Math.abs(fullInterimText.length - lastInterimTextLengthRef.current) > 6;
+              const shouldTranslate = (timeElapsed > 600 || textGrew) && fullInterimText.length > 3;
 
               if (shouldTranslate) {
                 lastTranslationTimeRef.current = now;
@@ -408,11 +407,9 @@ function Index() {
                 pendingMonitorTranslations.current++;
                 translateText(fullInterimText, toLangRef.current.name, fromLangRef.current.name)
                   .then((result) => {
-                    if (seqId >= monitorInterimSeq.current) {
-                      // Update the main translated field directly for immediate visibility
-                      activeTranslatedRef.current = result;
+                    if (seqId === monitorInterimSeq.current) {
                       setActiveMessage((prev) =>
-                        prev ? { ...prev, translated: result, interimTranslation: "" } : null
+                        prev ? { ...prev, interimTranslation: result } : null
                       );
                     }
                   })
