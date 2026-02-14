@@ -107,8 +107,8 @@ function Index() {
         // Trigger refinement on the last 2 entries
         const last2 = next.slice(-2);
         // Determine source/target for refinement based on speaker
-        const srcLang = speaker === "Speaker" ? to.name : from.name;
-        const tgtLang = speaker === "Speaker" ? from.name : to.name;
+        const srcLang = from.name;
+        const tgtLang = to.name;
         // Schedule refinement async (after state update)
         setTimeout(() => triggerRefinement(last2, srcLang, tgtLang), 0);
         return next;
