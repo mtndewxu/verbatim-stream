@@ -20,7 +20,7 @@ serve(async (req) => {
       );
     }
 
-    const { sentences, fromLang, toLang } = await req.json();
+    const { sentences, fromLang, toLang, previousContext } = await req.json();
 
     if (!sentences?.length || !fromLang || !toLang) {
       return new Response(
@@ -49,10 +49,9 @@ serve(async (req) => {
           messages: [
             {
               role: "system",
-              content: `You are a professional translation reviewer. You are given consecutive translated sentences from a live ${fromLang} to ${toLang} conversation. Review them together for:
-- Professional terminology consistency (e.g., CPO, OCS, technical terms)
-- Natural flow and coherence between sentences
-- Accuracy of meaning
+              content: `You are a professional translation editor. The previous sentence in the conversation was: '${previousContext || "None"}'. Please refine the following current sentences for terminology accuracy (e.g., CPO, OCS), grammar, and flow consistency with the previous context.
+
+Language direction: ${fromLang} to ${toLang}.
 
 Return ONLY the refined translations, one per line, numbered to match. No explanations.
 Example output:

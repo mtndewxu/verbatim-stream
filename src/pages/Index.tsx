@@ -61,14 +61,18 @@ function Index() {
   };
 
   // Trigger refinement on the last N entries (up to 2)
-  const triggerRefinement = useCallback((entriesToRefine: ConversationEntry[], sourceLang: string, targetLang: string) => {
+  const triggerRefinement = useCallback((entriesToRefine: ConversationEntry[], sourceLang: string, targetLang: string, allEntries: ConversationEntry[]) => {
     if (entriesToRefine.length === 0) return;
 
     const seqId = ++refinementSeq.current;
     const targetIds = entriesToRefine.map(e => e.id);
     const sentences = entriesToRefine.map(e => e.translated);
 
-    const promise = refineTranslations(sentences, sourceLang, targetLang)
+    // Get previous context: the entry just before the ones being refined
+    const firstRefineIdx = allEntries.findIndex(e => e.id === targetIds[0]);
+    const previousContext = firstRefineIdx > 0 ? allEntries[firstRefineIdx - 1].translated : undefined;
+
+    const promise = refineTranslations(sentences, sourceLang, targetLang, previousContext)
       .then((refined) => {
         if (seqId !== refinementSeq.current) return; // stale
         setEntries(prev => prev.map(e => {
@@ -106,11 +110,10 @@ function Index() {
         const next = [...prev, entry];
         // Trigger refinement on the last 2 entries
         const last2 = next.slice(-2);
-        // Determine source/target for refinement based on speaker
         const srcLang = from.name;
         const tgtLang = to.name;
-        // Schedule refinement async (after state update)
-        setTimeout(() => triggerRefinement(last2, srcLang, tgtLang), 0);
+        // Schedule refinement async (after state update), pass full list for context
+        setTimeout(() => triggerRefinement(last2, srcLang, tgtLang, next), 0);
         return next;
       });
     },
