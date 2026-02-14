@@ -39,6 +39,7 @@ function Index() {
   const activeTranslatedRef = useRef("");
   const pendingMonitorTranslations = useRef(0);
   const monitorTranslationSeq = useRef(0);
+  const monitorInterimSeq = useRef(0);
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
 
@@ -333,6 +334,7 @@ function Index() {
         activeTranslatedRef.current = "";
         pendingMonitorTranslations.current = 0;
         monitorTranslationSeq.current = 0;
+        monitorInterimSeq.current = 0;
         lastTranslationTimeRef.current = 0;
         lastInterimTextLengthRef.current = 0;
         setActiveMessage(null);
@@ -370,7 +372,7 @@ function Index() {
                       );
                     }
                   })
-                  .catch(() => {})
+                  .catch((err) => { console.error("[Monitor] Final translation error:", err); })
                   .finally(() => {
                     pendingMonitorTranslations.current--;
                   });
@@ -401,17 +403,17 @@ function Index() {
                 lastTranslationTimeRef.current = now;
                 lastInterimTextLengthRef.current = fullInterimText.length;
 
-                const seqId = ++monitorTranslationSeq.current;
+                const seqId = ++monitorInterimSeq.current;
                 pendingMonitorTranslations.current++;
                 translateText(fullInterimText, toLangRef.current.name, fromLangRef.current.name)
                   .then((result) => {
-                    if (seqId === monitorTranslationSeq.current) {
+                    if (seqId === monitorInterimSeq.current) {
                       setActiveMessage((prev) =>
                         prev ? { ...prev, interimTranslation: result } : null
                       );
                     }
                   })
-                  .catch(() => {})
+                  .catch((err) => { console.error("[Monitor] Interim translation error:", err); })
                   .finally(() => {
                     pendingMonitorTranslations.current--;
                   });
