@@ -40,6 +40,7 @@ function Index() {
   const pendingMonitorTranslations = useRef(0);
   const monitorTranslationSeq = useRef(0);
   const monitorInterimSeq = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const fromLangRef = useRef(fromLang);
   const toLangRef = useRef(toLang);
 
@@ -401,12 +402,29 @@ function Index() {
               const shouldTranslate = (isFirst || timeElapsed > 400 || textGrew) && fullInterimText.length > 1;
 
               if (shouldTranslate) {
+                // 1. Cancel the previous pending request immediately
+                if (abortControllerRef.current) {
+                  abortControllerRef.current.abort();
+                }
+
+                // 2. Create a new controller for the current request
+                const controller = new AbortController();
+                abortControllerRef.current = controller;
+
+                // 3. Update throttle refs
                 lastTranslationTimeRef.current = now;
                 lastInterimTextLengthRef.current = fullInterimText.length;
 
                 const seqId = ++monitorInterimSeq.current;
                 pendingMonitorTranslations.current++;
-                translateText(fullInterimText, toLangRef.current.name, fromLangRef.current.name)
+
+                // 4. Call API with the signal
+                translateText(
+                  fullInterimText,
+                  toLangRef.current.name,
+                  fromLangRef.current.name,
+                  controller.signal
+                )
                   .then((result) => {
                     if (seqId === monitorInterimSeq.current) {
                       setActiveMessage((prev) =>
@@ -414,7 +432,12 @@ function Index() {
                       );
                     }
                   })
-                  .catch((err) => { console.error("[Monitor] Interim translation error:", err); })
+                  .catch((err) => {
+                    // Ignore AbortErrors (expected behavior), log actual errors
+                    if (err.name !== 'AbortError') {
+                      console.error("[Monitor] Interim translation error:", err);
+                    }
+                  })
                   .finally(() => {
                     pendingMonitorTranslations.current--;
                   });
